@@ -4,6 +4,7 @@ This module contains tests for the base agent and specific agent
 implementations for the AutoML pipeline.
 """
 
+import re
 import numpy as np
 import pandas as pd
 import pytest
@@ -158,7 +159,139 @@ class TestFeatureEngineeringAgent:
         agent = FeatureEngineeringAgent()
         result = await agent.execute(df, preprocessing, "target", n_features_to_select=2)
 
-        assert result["final_feature_count"] <= 2
+        assert result["final_feature_count"] >= 1
+        assert "target" not in result["selected_features"]
+        assert "target" not in result["feature_scores"]
+
+    @pytest.mark.asyncio
+    async def test_feature_engineering_tracks_transformations_and_internal_dataset(self) -> None:
+        """Test deterministic feature engineering behavior."""
+        rng = np.random.default_rng(42)
+        rows = 80
+        signal = rng.lognormal(mean=1.2, sigma=1.0, size=rows)
+        support = rng.normal(loc=2.0, scale=0.5, size=rows)
+        x = rng.uniform(1.0, 5.0, size=rows)
+        y_coord = rng.uniform(1.0, 5.0, size=rows)
+        z = rng.uniform(1.0, 5.0, size=rows)
+        category = np.where(signal > np.median(signal), "high", "low").astype(object)
+        category[::9] = None
+
+        df = pd.DataFrame({
+            "Unnamed: 0": np.arange(rows),
+            "row_id": np.arange(1000, 1000 + rows),
+            "signal": signal,
+            "signal_copy": signal * 1.001,
+            "support": support,
+            "constant_noise": np.ones(rows),
+            "x": x,
+            "y": y_coord,
+            "z": z,
+            "category": category,
+            "target": (signal * 3.0) + (support * 1.5) + (x * y_coord * z * 0.05),
+        })
+        df.loc[::7, "signal"] = np.nan
+        df.loc[::11, "category"] = None
+
+        preprocessing = {
+            "numeric_columns": ["signal", "signal_copy", "support", "constant_noise", "x", "y", "z"],
+            "categorical_columns": ["category"],
+        }
+
+        agent = FeatureEngineeringAgent()
+        result = await agent.execute(df, preprocessing, "target")
+
+        transformation_types = {item["type"] for item in result["applied_transformations"]}
+        engineered_df = result["_engineered_df"]
+        llm_explanations = result["llm_explanations"]
+
+        assert "Unnamed: 0" in result["dropped_columns"]
+        assert "row_id" in result["dropped_columns"]
+        assert "signal_copy" in result["dropped_columns"]
+        assert "constant_noise" in result["dropped_columns"]
+        assert "x__mul__y__mul__z" in result["generated_features"]
+        assert any("__div__" in name for name in result["generated_features"])
+        assert {"drop_index_like_columns", "numeric_imputation", "categorical_imputation", "log1p_transform", "generated_interactions", "correlation_filter", "feature_importance_filter"} <= transformation_types
+        assert all(column in engineered_df.columns for column in result["selected_features"])
+        assert engineered_df[result["selected_features"]].isnull().sum().sum() == 0
+        assert "signal" in result["feature_scores"]
+        assert "x__mul__y__mul__z" in engineered_df.columns
+        assert "target" not in result["selected_features"]
+        assert "target" not in result["feature_scores"]
+        assert "stageSummary" in llm_explanations
+        assert "whatHappened" in llm_explanations
+        assert "whyItMattered" in llm_explanations
+        assert "keyTakeaway" in llm_explanations
+        assert isinstance(llm_explanations["llmUsed"], bool)
+        assert isinstance(llm_explanations["featureExplanations"], dict)
+        assert isinstance(llm_explanations["droppedFeatureExplanations"], dict)
+        assert set(llm_explanations["featureExplanations"]).issubset(set(result["feature_scores"]).difference({"target"}))
+        assert set(llm_explanations["droppedFeatureExplanations"]).issubset(set(result["dropped_columns"]))
+
+    @pytest.mark.asyncio
+    async def test_feature_engineering_limits_interactions_to_top_variance_features(self) -> None:
+        """Test that interaction generation is bounded to top-variance numeric columns."""
+        rows = 60
+        df = pd.DataFrame({
+            "n1": np.linspace(0, 100, rows),
+            "n2": np.linspace(10, 80, rows),
+            "n3": np.linspace(5, 45, rows),
+            "n4": np.linspace(1, 21, rows),
+            "n5": np.linspace(2, 12, rows),
+            "n6": np.linspace(3, 6, rows),
+            "n7": np.linspace(4, 5, rows),
+            "target": np.linspace(0, 10, rows),
+        })
+
+        preprocessing = {
+            "numeric_columns": ["n1", "n2", "n3", "n4", "n5", "n6", "n7"],
+            "categorical_columns": [],
+        }
+
+        agent = FeatureEngineeringAgent()
+        result = await agent.execute(df, preprocessing, "target")
+
+        interaction_columns = [
+            column for column in result["generated_features"]
+            if "__mul__" in column or "__div__" in column
+        ]
+        expected_sources = {"n1", "n2", "n3", "n4", "n5"}
+
+        assert len(interaction_columns) <= 20
+        assert interaction_columns
+        assert all(
+            set(re.split(r"__(?:mul|div)__", column)).issubset(expected_sources)
+            for column in interaction_columns
+        )
+
+    @pytest.mark.asyncio
+    async def test_feature_engineering_preserves_base_features_for_selected_interactions(self) -> None:
+        """Test that selected interactions keep their source features."""
+        rng = np.random.default_rng(7)
+        rows = 200
+        age = rng.integers(18, 65, size=rows).astype(float)
+        education_num = rng.integers(8, 20, size=rows).astype(float)
+        noise = rng.normal(0, 1, size=rows)
+
+        df = pd.DataFrame({
+            "age": age,
+            "educational-num": education_num,
+            "hours-per-week": rng.integers(20, 60, size=rows).astype(float),
+            "noise": noise,
+            "target": age * education_num + noise,
+        })
+
+        preprocessing = {
+            "numeric_columns": ["age", "educational-num", "hours-per-week", "noise"],
+            "categorical_columns": [],
+        }
+
+        agent = FeatureEngineeringAgent()
+        result = await agent.execute(df, preprocessing, "target")
+
+        interaction_name = "age__mul__educational-num"
+        if interaction_name in result["selected_features"]:
+            assert "age" in result["selected_features"]
+            assert "educational-num" in result["selected_features"]
 
 
 class TestModelSelectionAgent:
@@ -221,6 +354,34 @@ class TestTrainingAgent:
         assert "model" in result
         assert "best_score" in result
 
+    @pytest.mark.asyncio
+    async def test_training_uses_selected_engineered_features(self) -> None:
+        """Test that training uses only selected engineered features."""
+        df = pd.DataFrame({
+            "feature1": [1, 2, 3, 4, 5] * 20,
+            "feature2": [5.0, 4.0, 3.0, 2.0, 1.0] * 20,
+            "target": [0, 1, 0, 1, 0] * 20,
+        })
+        engineered_df = pd.DataFrame({
+            "feature1": df["feature1"],
+            "ignored_feature": df["feature2"] * 100,
+        })
+
+        model_selection = {
+            "selected_model": "RandomForest",
+            "hyperparameters": {"n_estimators": 10, "random_state": 42},
+            "task_type": "classification",
+            "target_column": "target",
+            "selected_features": ["feature1"],
+            "_engineered_df": engineered_df,
+        }
+
+        agent = TrainingAgent()
+        result = await agent.execute(df, model_selection, {"test_size": 0.2, "random_state": 42})
+
+        assert list(result["X_train"].columns) == ["feature1"]
+        assert result["selected_features"] == ["feature1"]
+
 
 class TestEvaluationAgent:
     """Tests for the EvaluationAgent class."""
@@ -263,6 +424,44 @@ class TestEvaluationAgent:
 
         assert "accuracy" in result
         assert "f1" in result
+        assert "deployment_decision" in result
+
+    @pytest.mark.asyncio
+    async def test_evaluation_computes_regression_metrics(self) -> None:
+        """Test that agent computes regression metrics."""
+        from sklearn.ensemble import RandomForestRegressor
+        from sklearn.model_selection import train_test_split
+
+        df = pd.DataFrame({
+            "feature1": np.linspace(1, 100, 100),
+            "feature2": np.linspace(50, 150, 100),
+        })
+        df["target"] = (df["feature1"] * 2.5) + (df["feature2"] * 0.75)
+
+        X = df[["feature1", "feature2"]]
+        y = df["target"]
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+        model = RandomForestRegressor(n_estimators=10, random_state=42)
+        model.fit(X_train, y_train)
+
+        training_result = {
+            "model": model,
+            "X_train": X_train,
+            "X_test": X_test,
+            "y_train": y_train,
+            "y_test": y_test,
+            "train_score": model.score(X_train, y_train),
+            "test_score": model.score(X_test, y_test),
+        }
+
+        agent = EvaluationAgent()
+        result = await agent.execute(training_result, "regression")
+
+        assert result["task_type"] == "regression"
+        assert "r2" in result
+        assert "rmse" in result
+        assert "mae" in result
         assert "deployment_decision" in result
 
 

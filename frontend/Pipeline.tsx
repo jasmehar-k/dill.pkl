@@ -358,6 +358,8 @@ const Pipeline = () => {
           datasetSummary={datasetSummary}
           metrics={metrics}
           stageLogs={selectedStage ? stageLogs[selectedStage.id] || [] : []}
+          taskType={taskType}
+          targetColumn={selectedColumn}
           onClose={() => setSelectedStage(null)}
         />
 
