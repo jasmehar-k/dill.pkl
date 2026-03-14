@@ -4,7 +4,17 @@ This module contains tests for the base agent and specific agent
 implementations for the AutoML pipeline.
 """
 
+import os
 import re
+import warnings
+
+# Disable joblib memory mapping to prevent resource tracker warnings
+os.environ['JOBLIB_MMAP_MODE'] = ''
+
+# Suppress joblib resource tracker warnings
+warnings.filterwarnings("ignore", message="resource_tracker: There appear to be .* leaked .* objects", category=UserWarning)
+warnings.filterwarnings("ignore", message="resource_tracker: .*FileNotFoundError", category=UserWarning)
+
 import numpy as np
 import pandas as pd
 import pytest

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 import re
-from typing import Any
+from typing import Any, Optional
 
 import numpy as np
 import pandas as pd
@@ -55,7 +55,7 @@ BOOLEAN_STRINGS = {
 
 
 def get_default_preprocessing_config(
-    overrides: dict[str, Any] | None = None,
+    overrides: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     """Return the default preprocessing configuration with optional overrides."""
     config = dict(DEFAULT_PREPROCESSING_CONFIG)
@@ -184,7 +184,7 @@ def choose_missing_value_strategy(
     df: pd.DataFrame,
     *,
     config: dict[str, Any],
-    protected_columns: set[str] | None = None,
+    protected_columns: Optional[set[str]] = None,
 ) -> dict[str, Any]:
     """Choose a deterministic missing-value strategy for the dataset."""
     protected_columns = protected_columns or set()

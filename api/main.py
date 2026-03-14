@@ -6,10 +6,19 @@ and retrieve results.
 """
 
 import json
+import os
 import shutil
 import uuid
+import warnings
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, Union
+
+# Disable joblib memory mapping to prevent resource tracker warnings
+os.environ['JOBLIB_MMAP_MODE'] = ''
+
+# Suppress joblib resource tracker warnings
+warnings.filterwarnings("ignore", message="resource_tracker: There appear to be .* leaked .* objects", category=UserWarning)
+warnings.filterwarnings("ignore", message="resource_tracker: .*FileNotFoundError", category=UserWarning)
 
 import numpy as np
 import pandas as pd
@@ -51,6 +60,7 @@ class PipelineState:
         self.dataset: Optional[pd.DataFrame] = None
         self.dataset_path: Optional[str] = None
         self.dataset_filename: Optional[str] = None
+        self.dataset_id: Optional[str] = None
         self.target_column: Optional[str] = None
         self.stage_results: dict[str, Any] = {}
         self.stage_statuses: dict[str, str] = {
@@ -553,7 +563,7 @@ def generate_chat_answer(
     except Exception:
         return fallback_answer, False
       
-def persist_evaluation_insights(pipeline_id: str | None, insights: dict[str, Any]) -> str | None:
+def persist_evaluation_insights(pipeline_id: Optional[str], insights: dict[str, Any]) -> Optional[str]:
     """Persist the structured evaluation insights as JSON for the current run."""
     if not pipeline_id:
         return None
@@ -562,6 +572,34 @@ def persist_evaluation_insights(pipeline_id: str | None, insights: dict[str, Any
     with insights_path.open("w", encoding="utf-8") as handle:
         json.dump(make_json_safe(insights), handle, indent=2, ensure_ascii=True)
     return str(insights_path)
+
+
+def cleanup_upload() -> bool:
+    """Delete the uploaded dataset file from disk for privacy."""
+    path = pipeline_state.dataset_path
+    if not path:
+        return False
+
+    file_path = Path(path)
+    try:
+        if file_path.exists():
+            file_path.unlink()
+            logger.info("Upload cleanup: deleted %s", file_path)
+        else:
+            logger.info("Upload cleanup: file already missing %s", file_path)
+    except Exception as exc:  # pragma: no cover - best-effort cleanup
+        logger.warning("Upload cleanup failed for %s: %s", file_path, exc)
+        return False
+    finally:
+        pipeline_state.dataset_path = None
+    return True
+
+
+def start_new_pipeline_run() -> str:
+    """Generate and assign a fresh pipeline ID for the current run."""
+    pipeline_state.pipeline_id = str(uuid.uuid4())
+    logger.info("New pipeline run id=%s", pipeline_state.pipeline_id)
+    return pipeline_state.pipeline_id
 
 
 async def run_pipeline_stage(stage: str, config: PipelineConfig):
@@ -830,6 +868,7 @@ async def run_pipeline_stage(stage: str, config: PipelineConfig):
             add_log(stage, f"Model saved to: {result.get('model_path', 'unknown')}")
             if result.get("package_ready"):
                 add_log(stage, "Deployment package ready for download")
+            cleanup_upload()
 
         pipeline_state.stage_statuses[stage] = "completed"
         add_log(stage, f"{stage} stage completed successfully")
@@ -891,7 +930,8 @@ async def upload_dataset(file: UploadFile = File(...)):
         pipeline_state.dataset = df
         pipeline_state.dataset_path = str(file_path)
         pipeline_state.dataset_filename = file.filename
-        pipeline_state.pipeline_id = dataset_id
+        pipeline_state.dataset_id = dataset_id
+        pipeline_state.pipeline_id = None
 
         # Reset state
         pipeline_state.stage_results = {}
@@ -1023,12 +1063,16 @@ async def start_pipeline(config: PipelineConfig = PipelineConfig()):
     if pipeline_state.target_column is None:
         raise HTTPException(status_code=400, detail="Target column not set")
 
+    start_new_pipeline_run()
+
     # Run all stages sequentially
     stages_order = ["analysis", "preprocessing", "features", "model_selection", "training", "loss", "evaluation", "results"]
 
     for stage in stages_order:
         if pipeline_state.stage_statuses.get(stage) == "waiting":
             await run_pipeline_stage(stage, config)
+
+    cleanup_upload()
 
     return {
         "status": "completed",
@@ -1041,6 +1085,9 @@ async def run_stage(stage_id: str, config: PipelineConfig = PipelineConfig()):
     """Run a specific pipeline stage."""
     if pipeline_state.dataset is None:
         raise HTTPException(status_code=404, detail="No dataset uploaded")
+
+    if not pipeline_state.pipeline_id:
+        start_new_pipeline_run()
 
     if stage_id not in pipeline_state.stage_statuses:
         raise HTTPException(status_code=404, detail=f"Stage '{stage_id}' not found")
