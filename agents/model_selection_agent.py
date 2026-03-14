@@ -523,7 +523,7 @@ class ModelSelectionAgent(BaseAgent):
             ),
             user_prompt=f"Model selection context:\n{self._safe_json(payload)}",
             temperature=0.1,
-            max_tokens=500,
+            max_tokens=2000,
         )
 
         if not response:
