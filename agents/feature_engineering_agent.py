@@ -261,6 +261,11 @@ class FeatureEngineeringAgent(BaseAgent):
                 "categorical_features": selected_categorical,
                 "_engineered_df": X,
             }
+            result["llm_explanations"] = self._build_feature_llm_explanations(
+                result=result,
+                target_column=target_column,
+                y=y,
+            )
 
             logger.info(
                 "Feature engineering complete: %s selected, %s generated, %s dropped",
@@ -609,3 +614,335 @@ class FeatureEngineeringAgent(BaseAgent):
                 categorical_selected.append(column)
 
         return numeric_selected, categorical_selected
+
+    def _build_feature_llm_explanations(
+        self,
+        *,
+        result: dict[str, Any],
+        target_column: str,
+        y: Optional[pd.Series],
+    ) -> dict[str, Any]:
+        """Create LLM-backed educational explanations with deterministic fallback."""
+        fallback = self._build_fallback_feature_explanations(
+            result=result,
+            target_column=target_column,
+            y=y,
+        )
+
+        task_type = fallback["task_type"]
+        top_feature_names = fallback["top_feature_names"]
+        dropped_feature_names = fallback["dropped_feature_names"]
+        feature_scores = result.get("feature_scores", {})
+        if not isinstance(feature_scores, dict):
+            feature_scores = {}
+        payload = {
+            "task_type": task_type,
+            "target_column": target_column,
+            "target_style": (
+                "categorical target; explain decisions in terms of class separation"
+                if task_type == "classification"
+                else "numeric target; explain decisions in terms of predicting a value"
+            ),
+            "target_preview": self._summarize_target_values(y),
+            "feature_engineering_result": {
+                "original_feature_count": result.get("feature_engineering_config", {}).get("original_feature_count"),
+                "post_engineering_feature_count": result.get("feature_engineering_config", {}).get("post_engineering_feature_count"),
+                "final_feature_count": result.get("final_feature_count", 0),
+                "selected_features": result.get("selected_features", []),
+                "generated_features": result.get("generated_features", []),
+                "dropped_columns": result.get("dropped_columns", []),
+                "feature_scores": [
+                    {"feature": str(name), "score": float(score)}
+                    for name, score in self._rank_features({
+                        str(name): float(score) for name, score in feature_scores.items()
+                    })
+                ],
+                "applied_transformations": [
+                    {
+                        "type": str(item.get("type") or ""),
+                        "columns": item.get("columns"),
+                        "source_columns": item.get("source_columns"),
+                        "threshold": item.get("threshold"),
+                        "strategy": item.get("strategy"),
+                    }
+                    for item in result.get("applied_transformations", [])
+                    if isinstance(item, dict)
+                ],
+                "numeric_features": result.get("numeric_features", []),
+                "categorical_features": result.get("categorical_features", []),
+                "pca_result": result.get("pca_result"),
+            },
+            "explanation_targets": {
+                "top_feature_names": top_feature_names,
+                "dropped_feature_names": dropped_feature_names,
+            },
+            "dropped_feature_reasons": fallback["dropped_reason_lookup"],
+            "fallback_guidance": fallback["explanations"],
+        }
+
+        response = self._generate_llm_json(
+            system_prompt=(
+                "You are an ML tutor writing dashboard copy for a feature-engineering stage. "
+                "Use ONLY the structured context provided. Do not invent transformations or claims. "
+                "Match the task_type exactly: classification explanations must talk about class separation; "
+                "regression explanations must talk about predicting a numeric value. "
+                "You are allowed to reason over the full feature-engineering result, including selected features, "
+                "generated interactions, dropped features, feature scores, and transformation history, and you should recap the choices clearly. "
+                "Make the writing dataset-specific, not generic: each narrative field should mention concrete feature names or target details from the provided context when possible. "
+                "Prefer referencing which features stood out, which interactions were created, and which dropped columns were removed. "
+                "Return ONLY valid JSON with keys "
+                "'stageSummary', 'whatHappened', 'whyItMattered', 'keyTakeaway', 'llmUsed', "
+                "'featureExplanations', and 'droppedFeatureExplanations'. "
+                "'stageSummary', 'whatHappened', 'whyItMattered', and 'keyTakeaway' must each be 1 to 2 sentences. "
+                "'featureExplanations' must be an object keyed only by the listed top_feature_names. "
+                "'droppedFeatureExplanations' must be an object keyed only by the listed dropped_feature_names. "
+                "'llmUsed' must be true. "
+                "Keep the tone beginner-friendly, encouraging, and precise."
+            ),
+            user_prompt=f"Feature engineering context:\n{self._safe_json(payload)}",
+            temperature=0.2,
+            max_tokens=1600,
+        )
+
+        if not response:
+            return fallback["explanations"]
+
+        explanations = {
+            "stageSummary": str(response.get("stageSummary") or fallback["explanations"]["stageSummary"]).strip(),
+            "whatHappened": str(response.get("whatHappened") or fallback["explanations"]["whatHappened"]).strip(),
+            "whyItMattered": str(response.get("whyItMattered") or fallback["explanations"]["whyItMattered"]).strip(),
+            "keyTakeaway": str(response.get("keyTakeaway") or fallback["explanations"]["keyTakeaway"]).strip(),
+            "llmUsed": True,
+            "featureExplanations": self._sanitize_named_explanations(
+                response.get("featureExplanations"),
+                allowed_names=top_feature_names,
+                fallback=fallback["explanations"]["featureExplanations"],
+            ),
+            "droppedFeatureExplanations": self._sanitize_named_explanations(
+                response.get("droppedFeatureExplanations"),
+                allowed_names=dropped_feature_names,
+                fallback=fallback["explanations"]["droppedFeatureExplanations"],
+            ),
+        }
+        return explanations
+
+    def _build_fallback_feature_explanations(
+        self,
+        *,
+        result: dict[str, Any],
+        target_column: str,
+        y: Optional[pd.Series],
+    ) -> dict[str, Any]:
+        """Build deterministic feature-stage explanations when the LLM is unavailable."""
+        feature_scores = result.get("feature_scores", {})
+        if not isinstance(feature_scores, dict):
+            feature_scores = {}
+
+        selected_features = [
+            str(feature) for feature in result.get("selected_features", [])
+            if str(feature) != target_column
+        ]
+        generated_features = [str(feature) for feature in result.get("generated_features", [])]
+        dropped_columns = [str(feature) for feature in result.get("dropped_columns", [])]
+        transformations = [
+            item for item in result.get("applied_transformations", [])
+            if isinstance(item, dict)
+        ]
+        task_type = "classification" if y is not None and self._is_classification_target(y) else "regression"
+
+        ranked_features = [
+            name for name, _ in sorted(
+                ((str(name), float(score)) for name, score in feature_scores.items() if str(name) != target_column),
+                key=lambda item: (-item[1], item[0]),
+            )
+        ]
+        top_feature_names = ranked_features[:8]
+        dropped_reason_lookup = self._build_dropped_reason_lookup(transformations)
+        selected_examples = selected_features[:5]
+        generated_examples = generated_features[:4]
+        dropped_examples = dropped_columns[:4]
+
+        transformation_types = {str(item.get("type")) for item in transformations if item.get("type")}
+        stage_summary = (
+            f"We kept {len(selected_features)} final features after engineering {len(generated_features)} new signals "
+            f"and removing {len(dropped_columns)} weaker or redundant ones. "
+            f"Strong signals included {self._join_examples(top_feature_names[:3])}."
+        )
+        what_happened = (
+            f"The pipeline cleaned the feature set, then kept features like {self._join_examples(selected_examples[:4])} "
+            f"for {'separating classes' if task_type == 'classification' else 'predicting the target value'}."
+        )
+        if generated_examples:
+            what_happened += f" It also created interactions such as {self._join_examples(generated_examples[:3])}."
+        why_happened_parts = []
+        if "generated_interactions" in transformation_types:
+            why_happened_parts.append(
+                f"Interaction features like {self._join_examples(generated_examples[:2])} let the model notice relationships between columns."
+            )
+        if "correlation_filter" in transformation_types:
+            correlated_examples = [
+                column for column in dropped_examples
+                if dropped_reason_lookup.get(column) == "correlation_filter"
+            ][:2]
+            if correlated_examples:
+                why_happened_parts.append(
+                    f"Correlation filtering removed redundant columns such as {self._join_examples(correlated_examples)}."
+                )
+            else:
+                why_happened_parts.append("Correlation filtering removed features that were telling almost the same story.")
+        if "feature_importance_filter" in transformation_types:
+            importance_examples = [
+                column for column in dropped_examples
+                if dropped_reason_lookup.get(column) == "feature_importance_filter"
+            ][:2]
+            if importance_examples:
+                why_happened_parts.append(
+                    f"Importance filtering dropped low-signal columns like {self._join_examples(importance_examples)} so the model could focus on stronger patterns."
+                )
+            else:
+                why_happened_parts.append("Importance filtering kept the model focused on features with stronger signal.")
+        if not why_happened_parts:
+            why_happened_parts.append("This step helps the model focus on stronger signals and ignore noise.")
+        why_it_mattered = " ".join(why_happened_parts)
+        key_takeaway = (
+            f"For this dataset, features like {self._join_examples(top_feature_names[:3])} carried more useful signal than dropped columns like "
+            f"{self._join_examples(dropped_examples[:2]) if dropped_examples else 'the weaker candidates'}, giving the model a cleaner set of clues before training."
+        )
+
+        feature_explanations = {
+            name: self._build_fallback_feature_explanation(name, task_type)
+            for name in top_feature_names
+        }
+        dropped_feature_explanations = {
+            name: self._build_fallback_dropped_feature_explanation(
+                feature_name=name,
+                reason_key=dropped_reason_lookup.get(name, "other"),
+                task_type=task_type,
+            )
+            for name in dropped_columns[:12]
+        }
+
+        return {
+            "task_type": task_type,
+            "top_feature_names": top_feature_names,
+            "dropped_feature_names": list(dropped_feature_explanations.keys()),
+            "dropped_reason_lookup": {name: dropped_reason_lookup.get(name, "other") for name in dropped_columns[:12]},
+            "explanations": {
+                "stageSummary": stage_summary,
+                "whatHappened": what_happened,
+                "whyItMattered": why_it_mattered,
+                "keyTakeaway": key_takeaway,
+                "llmUsed": False,
+                "featureExplanations": feature_explanations,
+                "droppedFeatureExplanations": dropped_feature_explanations,
+            },
+        }
+
+    def _summarize_target_values(self, y: Optional[pd.Series]) -> list[str]:
+        """Return a short preview of target values for explanation prompts."""
+        if y is None:
+            return []
+        try:
+            unique_values = y.dropna().astype(str).unique().tolist()
+        except Exception:
+            return []
+        return [str(value) for value in unique_values[:4]]
+
+    def _join_examples(self, feature_names: list[str]) -> str:
+        """Create a readable comma-separated example list."""
+        clean = [name for name in feature_names if name]
+        if not clean:
+            return "the strongest features"
+        if len(clean) == 1:
+            return clean[0]
+        if len(clean) == 2:
+            return f"{clean[0]} and {clean[1]}"
+        return f"{', '.join(clean[:-1])}, and {clean[-1]}"
+
+    def _build_dropped_reason_lookup(
+        self,
+        transformations: list[dict[str, Any]],
+    ) -> dict[str, str]:
+        """Map dropped features to the transformation that removed them."""
+        lookup: dict[str, str] = {}
+        for transformation in transformations:
+            reason_key = str(transformation.get("type") or "other")
+            columns = transformation.get("columns", [])
+            if not isinstance(columns, list):
+                continue
+            for column in columns:
+                lookup[str(column)] = reason_key
+        return lookup
+
+    def _build_fallback_feature_explanation(self, feature_name: str, task_type: str) -> str:
+        """Describe a selected feature without using the LLM."""
+        if "__mul__" in feature_name:
+            left, right = feature_name.split("__mul__", 1)
+            return (
+                f"This engineered feature multiplies {left} and {right}, which helps the model see how those signals work together "
+                f"when {('separating classes' if task_type == 'classification' else 'predicting the target value')}."
+            )
+        if "__div__" in feature_name:
+            left, right = feature_name.split("__div__", 1)
+            return (
+                f"This engineered feature compares {left} to {right}, giving the model a relative measurement that can sharpen "
+                f"{'classification' if task_type == 'classification' else 'regression'} predictions."
+            )
+        if feature_name.startswith("PC"):
+            return (
+                f"{feature_name} is a compressed numeric summary that keeps important variation while simplifying the feature space."
+            )
+        return (
+            f"{feature_name} stayed in the final set because it appeared to provide a useful direct signal for "
+            f"{'classification' if task_type == 'classification' else 'regression'}."
+        )
+
+    def _build_fallback_dropped_feature_explanation(
+        self,
+        *,
+        feature_name: str,
+        reason_key: str,
+        task_type: str,
+    ) -> str:
+        """Explain why a feature was dropped without using the LLM."""
+        if reason_key == "feature_importance_filter":
+            return (
+                f"{feature_name} was removed because it added very little extra signal for this {task_type} problem."
+            )
+        if reason_key == "correlation_filter":
+            return (
+                f"{feature_name} was removed because it overlapped strongly with another numeric feature."
+            )
+        if reason_key == "selection_cap":
+            return (
+                f"{feature_name} was a reasonable candidate, but it did not rank high enough to survive the final feature cap."
+            )
+        if reason_key == "drop_index_like_columns":
+            return (
+                f"{feature_name} looked more like an ID or bookkeeping column than a real predictive signal."
+            )
+        return f"{feature_name} was filtered out during feature cleanup."
+
+    def _sanitize_named_explanations(
+        self,
+        raw_value: Any,
+        *,
+        allowed_names: list[str],
+        fallback: dict[str, str],
+    ) -> dict[str, str]:
+        """Keep only LLM explanations for the expected feature names."""
+        if not isinstance(raw_value, dict):
+            return fallback
+
+        cleaned: dict[str, str] = {}
+        for name in allowed_names:
+            value = raw_value.get(name)
+            if isinstance(value, str) and value.strip():
+                cleaned[name] = value.strip()
+
+        if not cleaned:
+            return fallback
+
+        for name, value in fallback.items():
+            cleaned.setdefault(name, value)
+        return cleaned

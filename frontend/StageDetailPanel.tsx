@@ -1,8 +1,9 @@
 import { AnimatePresence, motion } from "framer-motion";
 import { X } from "lucide-react";
 import type { PipelineStage } from "@/data/pipelineStages";
-import type { DatasetSummary, MetricsResponse } from "@/lib/api";
+import type { DatasetSummary, MetricsResponse, TaskType } from "@/lib/api";
 import { StageVisualization } from "./StageVisualizations";
+import FeatureEngineeringDashboard from "./FeatureEngineeringDashboard";
 
 interface StageDetailPanelProps {
   stage: PipelineStage | null;
@@ -10,6 +11,8 @@ interface StageDetailPanelProps {
   datasetSummary: DatasetSummary | null;
   metrics: MetricsResponse | null;
   stageLogs: string[];
+  taskType: TaskType;
+  targetColumn: string | null;
   onClose: () => void;
 }
 
@@ -19,9 +22,12 @@ const StageDetailPanel = ({
   datasetSummary,
   metrics,
   stageLogs,
+  taskType,
+  targetColumn,
   onClose,
 }: StageDetailPanelProps) => {
   const highlights = stage ? buildHighlights(stage.id, stageResult, datasetSummary, metrics) : [];
+  const panelWidthClass = stage?.id === "features" ? "max-w-[min(96vw,1200px)]" : "max-w-lg";
 
   return (
     <AnimatePresence>
@@ -35,7 +41,7 @@ const StageDetailPanel = ({
             onClick={onClose}
           />
           <motion.div
-            className="glass-card fixed right-0 top-0 z-50 h-full w-full max-w-lg overflow-y-auto border-l border-border/50 scrollbar-thin"
+            className={`glass-card fixed right-0 top-0 z-50 h-full w-full overflow-y-auto border-l border-border/50 scrollbar-thin ${panelWidthClass}`}
             initial={{ x: "100%" }}
             animate={{ x: 0 }}
             exit={{ x: "100%" }}
@@ -58,67 +64,80 @@ const StageDetailPanel = ({
                 </button>
               </div>
 
-              <div className="space-y-2">
-                <h3 className="text-sm font-medium text-accent">About this stage</h3>
-                <p className="text-sm leading-relaxed text-secondary-foreground">{stage.details}</p>
-              </div>
-
-              {highlights.length > 0 && (
-                <div className="space-y-3">
-                  <h3 className="text-sm font-medium text-accent">Stage highlights</h3>
-                  <div className="grid grid-cols-2 gap-2">
-                    {highlights.map((highlight) => (
-                      <div key={highlight.label} className="glass-card space-y-1 p-3">
-                        <p className="text-[10px] text-muted-foreground">{highlight.label}</p>
-                        <p className="font-mono text-sm text-foreground">{highlight.value}</p>
-                      </div>
-                    ))}
+              {stage.id === "features" ? (
+                <FeatureEngineeringDashboard
+                  stage={stage}
+                  stageResult={stageResult}
+                  metrics={metrics}
+                  stageLogs={stageLogs}
+                  taskType={taskType}
+                  targetColumn={targetColumn}
+                />
+              ) : (
+                <>
+                  <div className="space-y-2">
+                    <h3 className="text-sm font-medium text-accent">About this stage</h3>
+                    <p className="text-sm leading-relaxed text-secondary-foreground">{stage.details}</p>
                   </div>
-                </div>
-              )}
 
-              <div className="space-y-2">
-                <h3 className="text-sm font-medium text-accent">Visualization</h3>
-                <div className="glass-card p-4">
-                  <StageVisualization
-                    stage={stage}
-                    stageResult={stageResult}
-                    datasetSummary={datasetSummary}
-                    metrics={metrics}
-                  />
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                <h3 className="text-sm font-medium text-accent">Stage logs</h3>
-                <div className="glass-card max-h-48 space-y-2 overflow-y-auto p-4 font-mono text-[11px] scrollbar-thin">
-                  {stageLogs.length > 0 ? (
-                    stageLogs.map((log, index) => (
-                      <p
-                        key={`${stage.id}-${index}`}
-                        className={`whitespace-pre-wrap leading-relaxed ${
-                          log.includes(" summary:")
-                            ? "text-accent"
-                            : log.includes(" overall:")
-                              ? "text-primary"
-                              : "text-foreground/75"
-                        }`}
-                      >
-                        {log}
-                      </p>
-                    ))
-                  ) : (
-                    <p className="text-muted-foreground">No logs recorded for this stage yet.</p>
+                  {highlights.length > 0 && (
+                    <div className="space-y-3">
+                      <h3 className="text-sm font-medium text-accent">Stage highlights</h3>
+                      <div className="grid grid-cols-2 gap-2">
+                        {highlights.map((highlight) => (
+                          <div key={highlight.label} className="glass-card space-y-1 p-3">
+                            <p className="text-[10px] text-muted-foreground">{highlight.label}</p>
+                            <p className="font-mono text-sm text-foreground">{highlight.value}</p>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
                   )}
-                </div>
-              </div>
 
-              <div className="space-y-2">
-                <h3 className="text-sm font-medium text-accent">Code</h3>
-                <pre className="glass-card overflow-x-auto whitespace-pre-wrap p-4 font-mono text-[12px] leading-relaxed text-foreground/80">
-                  {stage.codeSnippet}
-                </pre>
-              </div>
+                  <div className="space-y-2">
+                    <h3 className="text-sm font-medium text-accent">Visualization</h3>
+                    <div className="glass-card p-4">
+                      <StageVisualization
+                        stage={stage}
+                        stageResult={stageResult}
+                        datasetSummary={datasetSummary}
+                        metrics={metrics}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <h3 className="text-sm font-medium text-accent">Stage logs</h3>
+                    <div className="glass-card max-h-48 space-y-2 overflow-y-auto p-4 font-mono text-[11px] scrollbar-thin">
+                      {stageLogs.length > 0 ? (
+                        stageLogs.map((log, index) => (
+                          <p
+                            key={`${stage.id}-${index}`}
+                            className={`whitespace-pre-wrap leading-relaxed ${
+                              log.includes(" summary:")
+                                ? "text-accent"
+                                : log.includes(" overall:")
+                                  ? "text-primary"
+                                  : "text-foreground/75"
+                            }`}
+                          >
+                            {log}
+                          </p>
+                        ))
+                      ) : (
+                        <p className="text-muted-foreground">No logs recorded for this stage yet.</p>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <h3 className="text-sm font-medium text-accent">Code</h3>
+                    <pre className="glass-card overflow-x-auto whitespace-pre-wrap p-4 font-mono text-[12px] leading-relaxed text-foreground/80">
+                      {stage.codeSnippet}
+                    </pre>
+                  </div>
+                </>
+              )}
             </div>
           </motion.div>
         </>

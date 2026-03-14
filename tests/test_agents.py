@@ -202,6 +202,7 @@ class TestFeatureEngineeringAgent:
 
         transformation_types = {item["type"] for item in result["applied_transformations"]}
         engineered_df = result["_engineered_df"]
+        llm_explanations = result["llm_explanations"]
 
         assert "Unnamed: 0" in result["dropped_columns"]
         assert "row_id" in result["dropped_columns"]
@@ -216,6 +217,15 @@ class TestFeatureEngineeringAgent:
         assert "x__mul__y__mul__z" in engineered_df.columns
         assert "target" not in result["selected_features"]
         assert "target" not in result["feature_scores"]
+        assert "stageSummary" in llm_explanations
+        assert "whatHappened" in llm_explanations
+        assert "whyItMattered" in llm_explanations
+        assert "keyTakeaway" in llm_explanations
+        assert isinstance(llm_explanations["llmUsed"], bool)
+        assert isinstance(llm_explanations["featureExplanations"], dict)
+        assert isinstance(llm_explanations["droppedFeatureExplanations"], dict)
+        assert set(llm_explanations["featureExplanations"]).issubset(set(result["feature_scores"]).difference({"target"}))
+        assert set(llm_explanations["droppedFeatureExplanations"]).issubset(set(result["dropped_columns"]))
 
     @pytest.mark.asyncio
     async def test_feature_engineering_limits_interactions_to_top_variance_features(self) -> None:
