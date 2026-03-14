@@ -70,24 +70,81 @@ export interface StageResultResponse {
   result: Record<string, unknown> | null;
 }
 
+export interface BaselineMetrics {
+  strategy?: string | null;
+  label?: string | null;
+  value?: number | null;
+  accuracy?: number | null;
+  f1?: number | null;
+  roc_auc?: number | null;
+  r2?: number | null;
+  mae?: number | null;
+  mse?: number | null;
+  rmse?: number | null;
+}
+
 export interface MetricsResponse {
   task_type: TaskType;
   accuracy: number;
   precision: number;
   recall: number;
   f1: number;
+  roc_auc?: number | null;
   r2?: number | null;
   mae?: number | null;
   mse?: number | null;
   rmse?: number | null;
   best_score: number;
+  cv_scores?: number[];
+  cv_std?: number | null;
+  train_score?: number | null;
+  test_score?: number | null;
   model_name?: string | null;
   deployment_decision?: string | null;
   performance_summary?: string | null;
   confusion_matrix: number[][];
+  baseline_metrics?: BaselineMetrics | null;
 }
 
 export type ExplanationResponse = Record<string, unknown>;
+
+export type DeploymentRecommendation = "deploy" | "review" | "do_not_deploy";
+export type DeploymentConfidence = "high" | "medium" | "low";
+
+export interface EvaluationInsightsResponse {
+  stage_summary: string;
+  about_stage_text: string;
+  performance_story: string;
+  loss_explanation: string;
+  generalization_explanation: string;
+  cross_validation_explanation: string;
+  baseline_explanation: string;
+  deployment_reasoning: {
+    recommendation: DeploymentRecommendation;
+    confidence: DeploymentConfidence;
+    reason: string;
+    risk_note: string;
+    next_step: string;
+  };
+  metric_tooltips: {
+    r2: string;
+    rmse: string;
+    mae: string;
+    accuracy: string;
+    f1: string;
+    roc_auc: string;
+  };
+  chart_explanations: {
+    primary_chart: string;
+    secondary_chart: string;
+  };
+  beginner_notes: string[];
+  learning_questions: string[];
+  source: "openrouter" | "fallback";
+  llm_used: boolean;
+  model: string;
+  error?: string | null;
+}
 
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL as string | undefined) || "http://127.0.0.1:8000";
 
@@ -164,6 +221,10 @@ export function getStageResult(stageId: string): Promise<StageResultResponse> {
 
 export function getMetrics(): Promise<MetricsResponse> {
   return apiRequest<MetricsResponse>("/api/results/metrics");
+}
+
+export function getEvaluationInsights(): Promise<EvaluationInsightsResponse> {
+  return apiRequest<EvaluationInsightsResponse>("/api/results/evaluation-insights");
 }
 
 export function getExplanation(): Promise<ExplanationResponse> {

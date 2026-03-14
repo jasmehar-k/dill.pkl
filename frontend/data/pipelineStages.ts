@@ -151,24 +151,18 @@ print("best_epoch", best_epoch)`,
     id: "evaluation",
     label: "Evaluation",
     icon: "🎯",
-    description: "Measure model quality on held-out data.",
+    description: "Measure model quality, reliability, and deployment readiness on held-out data.",
     details:
-      "Evaluation computes classification metrics and confusion counts so you can judge the model beyond a single headline score.",
+      "Evaluation checks how well the model performs on unseen examples, compares it with simple baselines, and helps you judge whether the model generalizes well enough to trust.",
     tooltipPoints: [
       "Runs predictions on the test split",
-      "Computes precision, recall, and F1",
-      "Surfaces confusion matrix errors",
+      "Compares train, test, and cross-validation behavior",
+      "Summarizes whether the model looks deployment-ready",
     ],
     vizType: "confusionMatrix",
-    codeSnippet: `from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
-
-y_pred = model.predict(X_test)
-accuracy = accuracy_score(y_test, y_pred)
-matrix = confusion_matrix(y_test, y_pred)
-report = classification_report(y_test, y_pred)
-
-print(accuracy)
-print(matrix)`,
+    codeSnippet: `# The Evaluation panel now shows task-aware code automatically.
+# Classification runs show accuracy, F1, ROC-AUC, and confusion matrix examples.
+# Regression runs show R2, MAE, MSE, and RMSE examples.`,
   },
   {
     id: "results",
