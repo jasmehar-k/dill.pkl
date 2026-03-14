@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Bot, MessageCircle, Quote, Send, Sparkles, User, X } from "lucide-react";
 import {
@@ -263,11 +263,11 @@ const ChatBot = ({
                     </div>
                   )}
                   <div
-                    className={`max-w-[82%] whitespace-pre-line rounded-xl px-3 py-2 text-[12px] leading-relaxed ${
+                    className={`max-w-[82%] rounded-xl px-3 py-2 text-[12px] leading-relaxed ${
                       message.role === "user" ? "bg-primary/20 text-foreground" : "bg-secondary text-secondary-foreground"
                     }`}
                   >
-                    {message.content}
+                    {renderChatContent(message.content)}
                     {message.role === "assistant" && message.source && (
                       <div className="mt-2 text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
                         {message.source === "llm" ? "LLM response" : "Grounded fallback"}
@@ -395,6 +395,86 @@ const buildSelectionHistoryMessage = (context: ChatSelectionContext) =>
     context.source_label ? `Highlighted context from ${context.source_label}:` : "Highlighted context:",
     `"${context.text}"`,
   ].join("\n");
+
+const renderChatContent = (content: string) => {
+  const blocks = content.split(/\n\s*\n/).map((block) => block.trim()).filter(Boolean);
+
+  return (
+    <div className="space-y-3">
+      {blocks.map((block, blockIndex) => {
+        const lines = block.split("\n").map((line) => line.trim()).filter(Boolean);
+        const isBulletList = lines.length > 0 && lines.every((line) => line.startsWith("- "));
+
+        if (isBulletList) {
+          return (
+            <ul key={`block-${blockIndex}`} className="space-y-1.5 pl-4">
+              {lines.map((line, lineIndex) => (
+                <li key={`bullet-${blockIndex}-${lineIndex}`} className="list-disc marker:text-primary">
+                  {renderInlineFormatting(line.slice(2))}
+                </li>
+              ))}
+            </ul>
+          );
+        }
+
+        return (
+          <div key={`block-${blockIndex}`} className="space-y-1.5">
+            {lines.map((line, lineIndex) => {
+              const isSectionLabel =
+                line.endsWith(":") &&
+                !line.startsWith("- ") &&
+                line.length <= 48;
+
+              if (isSectionLabel) {
+                return (
+                  <p
+                    key={`line-${blockIndex}-${lineIndex}`}
+                    className="pt-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-primary"
+                  >
+                    {renderInlineFormatting(line.slice(0, -1))}
+                  </p>
+                );
+              }
+
+              return (
+                <p key={`line-${blockIndex}-${lineIndex}`} className="leading-6">
+                  {renderInlineFormatting(line)}
+                </p>
+              );
+            })}
+          </div>
+        );
+      })}
+    </div>
+  );
+};
+
+const renderInlineFormatting = (text: string) => {
+  const segments = text.split(/(\*\*.*?\*\*|`.*?`)/g).filter(Boolean);
+
+  return segments.map((segment, index) => {
+    if (segment.startsWith("**") && segment.endsWith("**")) {
+      return (
+        <strong key={`${segment}-${index}`} className="font-semibold text-foreground">
+          {segment.slice(2, -2)}
+        </strong>
+      );
+    }
+
+    if (segment.startsWith("`") && segment.endsWith("`")) {
+      return (
+        <code
+          key={`${segment}-${index}`}
+          className="rounded bg-background/60 px-1.5 py-0.5 font-mono text-[11px] text-accent"
+        >
+          {segment.slice(1, -1)}
+        </code>
+      );
+    }
+
+    return <Fragment key={`${segment}-${index}`}>{segment}</Fragment>;
+  });
+};
 
 const buildEmergencyFallback = (context: {
   datasetName: string | null;
