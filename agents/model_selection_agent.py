@@ -8,7 +8,7 @@ This agent recommends machine learning models based on:
 """
 
 import logging
-from typing import Any
+from typing import Any, Optional
 
 import pandas as pd
 from sklearn.ensemble import (

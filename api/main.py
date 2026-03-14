@@ -94,6 +94,11 @@ class DatasetSummaryResponse(BaseModel):
     numeric_summary: Optional[dict[str, Any]] = None
 
 
+class DatasetPreviewResponse(BaseModel):
+    rows: list[dict[str, Any]]
+    columns: list[str]
+
+
 # Helper functions
 def add_log(stage: str, message: str):
     """Add a log message to a stage."""
@@ -429,6 +434,9 @@ async def upload_dataset(file: UploadFile = File(...)):
         else:
             raise HTTPException(status_code=400, detail="Unsupported file type")
 
+        # Drop common index-like columns automatically (e.g., 'Unnamed: 0')
+        df = df.loc[:, ~df.columns.astype(str).str.match(r"^Unnamed")]
+
         pipeline_state.dataset = df
         pipeline_state.dataset_path = str(file_path)
         pipeline_state.dataset_filename = file.filename
@@ -500,6 +508,20 @@ async def get_columns():
         })
 
     return {"columns": columns}
+
+
+@app.get("/api/dataset/preview")
+async def get_dataset_preview(n: int = 5):
+    """Return the first n rows of the current dataset."""
+    if pipeline_state.dataset is None:
+        raise HTTPException(status_code=404, detail="No dataset uploaded")
+
+    n = max(1, min(n, 20))
+    df = pipeline_state.dataset.head(n)
+    return {
+        "rows": df.to_dict(orient="records"),
+        "columns": list(df.columns),
+    }
 
 
 @app.post("/api/dataset/target")

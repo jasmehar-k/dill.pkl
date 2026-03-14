@@ -201,7 +201,7 @@ class ExplanationGeneratorAgent(BaseAgent):
         evaluation_result: dict[str, Any],
         fallback_explanations: list[str],
         fallback_summary: str,
-    ) -> dict[str, Any] | None:
+    ) -> Optional[dict[str, Any]]:
         """Use an LLM to produce clearer user-facing model explanations."""
         top_features = sorted(
             feature_importance.items(),
