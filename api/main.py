@@ -511,6 +511,20 @@ async def get_columns():
 
 
 @app.get("/api/dataset/preview")
+async def get_dataset_preview(rows: int = 5):
+    """Get a small preview of the dataset rows."""
+    if pipeline_state.dataset is None:
+        raise HTTPException(status_code=404, detail="No dataset uploaded")
+
+    safe_rows = max(1, min(rows, 20))
+    df = pipeline_state.dataset.head(safe_rows)
+    return {
+        "columns": list(df.columns),
+        "rows": df.fillna("").to_dict(orient="records"),
+    }
+
+
+@app.get("/api/dataset/preview")
 async def get_dataset_preview(n: int = 5):
     """Return the first n rows of the current dataset."""
     if pipeline_state.dataset is None:
