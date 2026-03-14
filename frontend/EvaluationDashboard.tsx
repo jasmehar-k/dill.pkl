@@ -106,6 +106,7 @@ const EvaluationDashboard = ({
     | undefined;
   const showTreeMetrics = Boolean(treeMetrics);
   const showLoss = !showTreeMetrics && lossSource === "real";
+  const showTrainingBehaviorSection = showTreeMetrics || showLoss;
   const lossCurveData = useMemo(
     () => (showLoss ? buildLossCurveData(lossStageResult) : []),
     [lossStageResult, showLoss],
@@ -228,7 +229,7 @@ const EvaluationDashboard = ({
           <p className="mt-4 text-sm leading-7 text-secondary-foreground">{displayInsights.performance_story}</p>
         </section>
 
-        {showTreeMetrics ? (
+        {showTrainingBehaviorSection && (showTreeMetrics ? (
           <section className="glass-card border-border/60 p-5">
             <SectionHeading
               title="Tree Training Progression"
@@ -318,7 +319,7 @@ const EvaluationDashboard = ({
             </div>
             <p className="mt-4 text-sm leading-7 text-secondary-foreground">{displayInsights.loss_explanation}</p>
           </section>
-        )}
+        ))}
 
         <section className="space-y-3">
           <SectionHeading
