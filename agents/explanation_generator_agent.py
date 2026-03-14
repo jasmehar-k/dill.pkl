@@ -35,6 +35,7 @@ class ExplanationGeneratorAgent(BaseAgent):
         training_result: dict[str, Any],
         evaluation_result: dict[str, Any],
         X_data: Optional[Any] = None,
+        pipeline_context: Optional[dict[str, Any]] = None,
     ) -> dict[str, Any]:
         """Generate explanations for the model.
 
@@ -69,13 +70,14 @@ class ExplanationGeneratorAgent(BaseAgent):
                 feature_importance,
                 evaluation_result,
             )
-            summary = self._generate_summary(explanations, evaluation_result)
+            summary = self._generate_summary(explanations, evaluation_result, pipeline_context)
 
             llm_explanation = self._generate_llm_explanation(
                 feature_importance=feature_importance,
                 evaluation_result=evaluation_result,
                 fallback_explanations=explanations,
                 fallback_summary=summary,
+                pipeline_context=pipeline_context,
             )
 
             if llm_explanation:
@@ -87,6 +89,7 @@ class ExplanationGeneratorAgent(BaseAgent):
                 "explanations": explanations,
                 "summary": summary,
                 "llm_used": bool(llm_explanation),
+                "pipeline_summary": self._build_pipeline_summary(pipeline_context),
             }
 
             # logger.info("Explanation generation complete")
@@ -182,6 +185,7 @@ class ExplanationGeneratorAgent(BaseAgent):
         self,
         explanations: list[str],
         evaluation_result: dict[str, Any],
+        pipeline_context: Optional[dict[str, Any]] = None,
     ) -> str:
         """Generate a summary of the explanation."""
         summary = "Model Explanation Summary:\n\n"
@@ -192,7 +196,53 @@ class ExplanationGeneratorAgent(BaseAgent):
         decision = evaluation_result.get("deployment_decision", "unknown")
         summary += f"\nFinal decision: {decision.upper()}"
 
+        pipeline_summary = self._build_pipeline_summary(pipeline_context)
+        if pipeline_summary:
+            summary += f"\n\nPipeline recap:\n{pipeline_summary}"
+
         return summary
+
+    def _build_pipeline_summary(self, pipeline_context: Optional[dict[str, Any]]) -> str:
+        """Create a short pipeline recap from available context."""
+        if not pipeline_context:
+            return ""
+
+        lines: list[str] = []
+        dataset = pipeline_context.get("dataset")
+        target = pipeline_context.get("target_column")
+        task_type = pipeline_context.get("task_type")
+        if dataset:
+            lines.append(f"- Dataset: {dataset}")
+        if target:
+            lines.append(f"- Target column: {target}")
+        if task_type:
+            lines.append(f"- Task type: {task_type}")
+
+        model_selection = pipeline_context.get("model_selection", {})
+        if isinstance(model_selection, dict):
+            selected_model = model_selection.get("selected_model")
+            if selected_model:
+                lines.append(f"- Selected model: {selected_model}")
+
+        training = pipeline_context.get("training", {})
+        if isinstance(training, dict):
+            best_score = training.get("best_score")
+            if best_score is not None:
+                lines.append(f"- Best CV score: {best_score:.3f}" if isinstance(best_score, (int, float)) else f"- Best CV score: {best_score}")
+
+        evaluation = pipeline_context.get("evaluation", {})
+        if isinstance(evaluation, dict):
+            decision = evaluation.get("deployment_decision")
+            if decision:
+                lines.append(f"- Deployment decision: {str(decision).upper()}")
+
+        deployment = pipeline_context.get("deployment", {})
+        if isinstance(deployment, dict):
+            model_path = deployment.get("model_path")
+            if model_path:
+                lines.append(f"- Model artifact: {model_path}")
+
+        return "\n".join(lines)
 
     def _generate_llm_explanation(
         self,
@@ -201,6 +251,7 @@ class ExplanationGeneratorAgent(BaseAgent):
         evaluation_result: dict[str, Any],
         fallback_explanations: list[str],
         fallback_summary: str,
+        pipeline_context: Optional[dict[str, Any]] = None,
     ) -> Optional[dict[str, Any]]:
         """Use an LLM to produce clearer user-facing model explanations."""
         top_features = sorted(
@@ -224,15 +275,18 @@ class ExplanationGeneratorAgent(BaseAgent):
             "top_features": top_features,
             "fallback_explanations": fallback_explanations,
             "fallback_summary": fallback_summary,
+            "pipeline_context": pipeline_context or {},
         }
 
         response = self._generate_llm_json(
             system_prompt=(
                 "You are an AutoML explanation assistant. "
+                "Provide a concise but comprehensive rundown of the pipeline decisions, including model selection, "
+                "training outcomes, evaluation results, and deployment status. "
                 "Write concise, trustworthy explanations for model performance and feature importance. "
                 "Return ONLY valid JSON with keys 'explanations' and 'summary'. "
                 "explanations must be a list of 2 to 4 short bullets written as sentences. "
-                "summary must be a short paragraph."
+                "summary must be a short paragraph that includes pipeline recap and deployment status."
             ),
             user_prompt=f"Explanation context:\n{self._safe_json(payload)}",
             temperature=0.2,

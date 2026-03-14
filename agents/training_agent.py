@@ -122,8 +122,13 @@ class TrainingAgent(BaseAgent):
                 scoring="accuracy" if task_type == "classification" else "r2",
             )
 
+            # Measure training time
+            import time
+            start_time = time.perf_counter()
+
             # Train on full training set
             model.fit(X_train, y_train)
+            training_time = time.perf_counter() - start_time
 
             # Calculate training score
             train_score = model.score(X_train, y_train)
@@ -151,6 +156,8 @@ class TrainingAgent(BaseAgent):
                 "train_loss": train_loss,
                 "val_loss": val_loss,
                 "best_epoch": best_epoch,
+                "feature_count": X.shape[1],
+                "training_time": float(training_time),
                 "X_train": X_train,
                 "X_test": X_test,
                 "y_train": y_train,

@@ -46,7 +46,7 @@ class ModelSelectionAgent(BaseAgent):
         features: dict[str, Any],
         target_column: str,
         task_type: str = "classification",
-        analysis: dict[str, Any] | None = None,
+        analysis: Optional[dict[str, Any]] = None,
     ) -> dict[str, Any]:
         """Select appropriate models for the dataset.
 
@@ -237,7 +237,7 @@ class ModelSelectionAgent(BaseAgent):
         n_features: int,
         task_type: str,
         class_balance: float,
-        analysis: dict[str, Any] | None = None,
+        analysis: Optional[dict[str, Any]] = None,
     ) -> list[str]:
         """Select candidate models based on data characteristics."""
         candidates = []
@@ -368,7 +368,7 @@ class ModelSelectionAgent(BaseAgent):
         task_type: str,
         class_balance: float,
         selected_model: str,
-        analysis: dict[str, Any] | None = None,
+        analysis: Optional[dict[str, Any]] = None,
     ) -> str:
         """Generate reasoning for model selection."""
         reasoning_parts = []
@@ -410,8 +410,8 @@ class ModelSelectionAgent(BaseAgent):
         default_reasoning: str,
         target_column: str,
         selected_features: list[str],
-        analysis: dict[str, Any] | None = None,
-    ) -> dict[str, Any] | None:
+        analysis: Optional[dict[str, Any]] = None,
+    ) -> Optional[dict[str, Any]]:
         """Use an LLM to refine model choice within deterministic guardrails."""
         payload = {
             "task_type": task_type,
@@ -497,7 +497,7 @@ class ModelSelectionAgent(BaseAgent):
         reasoning: str,
         target_column: str,
         selected_features: list[str],
-        analysis: dict[str, Any] | None = None,
+        analysis: Optional[dict[str, Any]] = None,
     ) -> str:
         """Generate a short, dataset-specific summary for the selected model."""
         payload = {

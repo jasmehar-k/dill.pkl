@@ -54,33 +54,30 @@ const Heatmap = ({ stageResult }: { stageResult: Record<string, unknown> | null 
   );
 };
 
-const LossCurve = ({ stageResult }: { stageResult: Record<string, unknown> | null }) => {
-  const trainLoss = (stageResult?.train_loss as number[] | undefined) || [];
-  const valLoss = (stageResult?.val_loss as number[] | undefined) || [];
-  const h = 120;
-  const w = 280;
-
-  if (trainLoss.length === 0 || valLoss.length === 0) {
-    return <EmptyState message="Loss curves will appear after training completes." />;
+const CvBars = ({ stageResult }: { stageResult: Record<string, unknown> | null }) => {
+  const cvScores = (stageResult?.cv_scores as number[] | undefined) || [];
+  if (cvScores.length === 0) {
+    return <EmptyState message="Cross-validation scores will appear after training completes." />;
   }
-
-  const toPath = (values: number[]) =>
-    values.map((value, index) => `${(index / Math.max(values.length - 1, 1)) * w},${h - value * h}`).join(" ");
-
+  const maxScore = Math.max(...cvScores, 1);
   return (
-    <svg viewBox={`-10 -10 ${w + 20} ${h + 30}`} className="w-full max-w-xs">
-      <polyline points={toPath(trainLoss)} fill="none" stroke="hsl(265 80% 60%)" strokeWidth="2" />
-      <polyline points={toPath(valLoss)} fill="none" stroke="hsl(145 70% 50%)" strokeWidth="2" strokeDasharray="4" />
-      <text x={w / 2} y={h + 20} textAnchor="middle" className="fill-muted-foreground text-[10px]">
-        Epoch
-      </text>
-      <text x={w - 12} y={h - trainLoss[trainLoss.length - 1] * h - 5} className="fill-primary text-[9px]">
-        train
-      </text>
-      <text x={w - 12} y={h - valLoss[valLoss.length - 1] * h - 5} className="fill-accent text-[9px]">
-        val
-      </text>
-    </svg>
+    <div className="space-y-2">
+      {cvScores.map((score, idx) => (
+        <div key={idx} className="flex items-center gap-2">
+          <span className="w-16 text-right font-mono text-[11px] text-muted-foreground">Fold {idx + 1}</span>
+          <div className="h-5 flex-1 overflow-hidden rounded-sm bg-secondary">
+            <div
+              className="h-full rounded-sm"
+              style={{
+                width: `${(score / maxScore) * 100}%`,
+                background: "linear-gradient(90deg, hsl(265 80% 60%), hsl(145 70% 50%))",
+              }}
+            />
+          </div>
+          <span className="w-12 font-mono text-[11px] text-foreground/70">{score.toFixed(3)}</span>
+        </div>
+      ))}
+    </div>
   );
 };
 
@@ -293,7 +290,7 @@ export const StageVisualization = ({
 }: StageVisualizationProps) => {
   const vizMap: Record<string, ReactNode> = {
     heatmap: <Heatmap stageResult={stageResult} />,
-    lossCurve: <LossCurve stageResult={stageResult} />,
+    lossCurve: <CvBars stageResult={stageResult} />,
     barChart: <BarChart stageResult={stageResult} />,
     table: <DataTable datasetSummary={datasetSummary} />,
     confusionMatrix: <ConfusionMatrix metrics={metrics} stageResult={stageResult} />,
