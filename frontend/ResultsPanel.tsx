@@ -6,9 +6,10 @@ interface ResultsPanelProps {
   isComplete: boolean;
   metrics: MetricsResponse | null;
   results: Record<string, unknown> | null;
+  explanation: Record<string, unknown> | null;
 }
 
-const ResultsPanel = ({ isComplete, metrics, results }: ResultsPanelProps) => {
+const ResultsPanel = ({ isComplete, metrics, results, explanation }: ResultsPanelProps) => {
   if (!isComplete) return null;
 
   const downloadMetrics = () => {

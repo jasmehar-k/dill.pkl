@@ -2,12 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { X } from "lucide-react";
 import type { PipelineStage } from "@/data/pipelineStages";
-import type {
-  DatasetPreviewResponse,
-  DatasetSummary,
-  MetricsResponse,
-  TaskType,
-} from "@/lib/api";
+import type { DatasetPreviewResponse, DatasetSummary, MetricsResponse, TaskType } from "@/lib/api";
 import { getDatasetPreview } from "@/lib/api";
 import FeatureEngineeringDashboard from "./FeatureEngineeringDashboard";
 import { StageVisualization } from "./StageVisualizations";
@@ -20,6 +15,7 @@ interface StageDetailPanelProps {
   stageLogs: string[];
   taskType: TaskType;
   targetColumn: string | null;
+  explanation?: Record<string, unknown> | null;
   onClose: () => void;
 }
 
@@ -31,6 +27,7 @@ const StageDetailPanel = ({
   stageLogs,
   taskType,
   targetColumn,
+  explanation,
   onClose,
 }: StageDetailPanelProps) => {
   const [datasetPreview, setDatasetPreview] = useState<DatasetPreviewResponse | null>(null);
@@ -39,8 +36,32 @@ const StageDetailPanel = ({
   const isFeatureStage = stage?.id === "features";
   const isPreprocessing = stage?.id === "preprocessing";
   const isModelSelection = stage?.id === "model_selection";
+  const isResults = stage?.id === "results";
+
   const highlights = stage ? buildHighlights(stage.id, stageResult, datasetSummary, metrics) : [];
   const panelWidthClass = getPanelWidthClass(stage?.id ?? "");
+
+  const explanationSummary = explanation?.summary ? String(explanation.summary) : "";
+  const pipelineSummary = explanation?.pipeline_summary ? String(explanation.pipeline_summary) : "";
+  const explanationBullets = Array.isArray(explanation?.explanations)
+    ? (explanation?.explanations as string[]).map((item) => String(item)).filter(Boolean)
+    : [];
+
+  const summaryLines = explanationSummary
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .filter((line) => line.toLowerCase() !== "model explanation summary:");
+  const summaryBullets = summaryLines.filter((line) => /^\d+\./.test(line)).map((line) => line.replace(/^\d+\.\s*/, ""));
+  const summaryText = summaryLines.filter((line) => !/^\d+\./.test(line) && !line.toLowerCase().startsWith("final decision:"));
+  const summaryDecision = summaryLines.find((line) => line.toLowerCase().startsWith("final decision:"));
+
+  const pipelineLines = pipelineSummary
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => line.replace(/^-+\s*/, ""));
+
   const aboutText = useMemo(() => {
     if (!stage) return "";
     if (isPreprocessing) {
@@ -102,14 +123,64 @@ const StageDetailPanel = ({
                 />
               ) : (
                 <>
-                  <StageHeader stage={stage} />
-
                   <div className="space-y-2">
                     <h3 className="text-sm font-medium text-accent">About this stage</h3>
                     <p className="text-sm leading-relaxed text-secondary-foreground">{aboutText}</p>
                   </div>
 
-                  {highlights.length > 0 && (
+                  {isResults && (explanationSummary || pipelineSummary || explanationBullets.length > 0) && (
+                    <div className="space-y-3">
+                      <h3 className="text-sm font-medium text-accent">Pipeline recap</h3>
+                      {(summaryText.length > 0 || summaryBullets.length > 0 || summaryDecision) && (
+                        <div className="glass-card space-y-2 p-4 text-[11px] text-secondary-foreground">
+                          {summaryText.map((line) => (
+                            <p key={line} className="text-secondary-foreground">
+                              {line}
+                            </p>
+                          ))}
+                          {summaryBullets.length > 0 && (
+                            <div className="space-y-1">
+                              {summaryBullets.map((item, index) => (
+                                <div key={`${item}-${index}`} className="flex items-start gap-2">
+                                  <span className="text-accent">•</span>
+                                  <span>{item}</span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                          {summaryDecision && (
+                            <p className="text-[11px] font-semibold uppercase tracking-wide text-primary">
+                              {summaryDecision}
+                            </p>
+                          )}
+                        </div>
+                      )}
+
+                      {explanationBullets.length > 0 && (
+                        <div className="glass-card space-y-1 p-4 text-[11px] text-secondary-foreground">
+                          {explanationBullets.map((item, index) => (
+                            <div key={`${item}-${index}`} className="flex items-start gap-2">
+                              <span className="text-accent">•</span>
+                              <span>{item}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      {pipelineLines.length > 0 && (
+                        <div className="glass-card space-y-1 p-4 text-[11px] text-secondary-foreground">
+                          {pipelineLines.map((line, index) => (
+                            <div key={`${line}-${index}`} className="flex items-start gap-2">
+                              <span className="text-accent">•</span>
+                              <span>{line}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {highlights.length > 0 && !isModelSelection && (
                     <div className="space-y-3">
                       <h3 className="text-sm font-medium text-accent">Stage highlights</h3>
                       <div className="grid grid-cols-2 gap-2">
@@ -127,36 +198,39 @@ const StageDetailPanel = ({
 
                   {isPreprocessing ? (
                     <>
-                      <div className="space-y-2">
-                        <h3 className="text-sm font-medium text-accent">Dataset overview</h3>
-                        <div className="glass-card p-4">
-                          <StageVisualization
-                            stage={stage}
-                            stageResult={stageResult}
-                            datasetSummary={datasetSummary}
-                            metrics={metrics}
-                          />
+                      {!isResults && (
+                        <div className="space-y-2">
+                          <h3 className="text-sm font-medium text-accent">Dataset overview</h3>
+                          <div className="glass-card p-4">
+                            <StageVisualization
+                              stage={stage}
+                              stageResult={stageResult}
+                              datasetSummary={datasetSummary}
+                              metrics={metrics}
+                            />
+                          </div>
                         </div>
-                      </div>
+                      )}
 
-                      <div className="space-y-2">
-                        <h3 className="text-sm font-medium text-accent">How we prepared your data</h3>
-                        <div className="glass-card space-y-2 p-4 text-sm leading-relaxed text-secondary-foreground">
-                          <PreprocessExplanation stageResult={stageResult} datasetSummary={datasetSummary} />
+                      {!isResults && (
+                        <div className="space-y-2">
+                          <h3 className="text-sm font-medium text-accent">How we prepared your data</h3>
+                          <div className="glass-card space-y-2 p-4 text-sm leading-relaxed text-secondary-foreground">
+                            <PreprocessExplanation stageResult={stageResult} datasetSummary={datasetSummary} />
+                          </div>
                         </div>
-                      </div>
+                      )}
 
-                      <div className="space-y-2">
-                        <h3 className="text-sm font-medium text-accent">Dataset preview</h3>
-                        <DatasetPreviewCard
-                          datasetPreview={datasetPreview}
-                          isLoadingPreview={isLoadingPreview}
-                        />
-                      </div>
+                      {!isResults && (
+                        <div className="space-y-2">
+                          <h3 className="text-sm font-medium text-accent">Dataset preview</h3>
+                          <DatasetPreviewCard datasetPreview={datasetPreview} isLoadingPreview={isLoadingPreview} />
+                        </div>
+                      )}
                     </>
                   ) : (
                     <>
-                      {!isModelSelection && (
+                      {!isModelSelection && !isResults && (
                         <div className="space-y-2">
                           <h3 className="text-sm font-medium text-accent">Visualization</h3>
                           <div className="glass-card p-4">
@@ -170,10 +244,9 @@ const StageDetailPanel = ({
                         </div>
                       )}
 
-                      {!isModelSelection && (
+                      {!isModelSelection && !isResults && (
                         <>
                           <StageLogs stage={stage} stageLogs={stageLogs} />
-
                           <div className="space-y-2">
                             <h3 className="text-sm font-medium text-accent">Code</h3>
                             <pre className="glass-card overflow-x-auto whitespace-pre-wrap p-4 font-mono text-[12px] leading-relaxed text-foreground/80">
@@ -193,16 +266,6 @@ const StageDetailPanel = ({
     </AnimatePresence>
   );
 };
-
-const StageHeader = ({ stage }: { stage: PipelineStage }) => (
-  <div className="flex items-start gap-3">
-    <span className="text-3xl">{stage.icon}</span>
-    <div className="space-y-1">
-      <h2 className="text-xl font-semibold text-foreground">{stage.label}</h2>
-      <p className="text-sm text-muted-foreground">{stage.description}</p>
-    </div>
-  </div>
-);
 
 const DatasetPreviewCard = ({
   datasetPreview,
@@ -446,11 +509,9 @@ const buildComplexity = (nSamples: number, modelName: string) => {
   const lower = modelName.toLowerCase();
   const heavyModels = ["xgboost", "gradient", "svm", "svr"];
   const base = heavyModels.some((key) => lower.includes(key)) ? "High" : "Medium";
-  if (nSamples < 5000) return { complexity: "Low", time: "1-3 seconds", memory: "Low" };
-  if (nSamples > 80000) {
-    return { complexity: base === "High" ? "High" : "Medium", time: "8-20 seconds", memory: "High" };
-  }
-  return { complexity: base, time: "3-10 seconds", memory: base === "High" ? "High" : "Moderate" };
+  if (nSamples < 5000) return { complexity: "Low", time: "1–3 seconds", memory: "Low" };
+  if (nSamples > 80000) return { complexity: base === "High" ? "High" : "Medium", time: "8–20 seconds", memory: "High" };
+  return { complexity: base, time: "3–10 seconds", memory: base === "High" ? "High" : "Moderate" };
 };
 
 const buildNotChosenReason = (candidate: string, selected: string, nSamples: number) => {
@@ -521,7 +582,7 @@ const buildModelSelectionPanel = (stageResult: Record<string, unknown> | null) =
               <div key={candidate} className="flex items-center justify-between rounded-lg bg-secondary/50 px-3 py-2 text-xs">
                 <div className="flex items-center gap-2">
                   <span className={`text-[10px] ${candidate === selectedModel ? "text-accent" : "text-muted-foreground"}`}>
-                    {candidate === selectedModel ? "Selected" : "Option"}
+                    {candidate === selectedModel ? "✓" : "•"}
                   </span>
                   <span className="font-mono text-[11px] text-foreground">{candidate}</span>
                 </div>
@@ -597,7 +658,7 @@ const buildModelSelectionPanel = (stageResult: Record<string, unknown> | null) =
           {capabilities.length > 0 ? (
             capabilities.map((item) => (
               <div key={item} className="flex items-center gap-2">
-                <span className="text-accent">+</span>
+                <span className="text-accent">✓</span>
                 <span>{item}</span>
               </div>
             ))
@@ -660,7 +721,7 @@ const PreprocessExplanation = ({
       <ul className="ml-4 list-disc space-y-1 text-sm text-secondary-foreground">
         <li>Any missing values were filled in automatically.</li>
         <li>Columns with categories were converted into numbers so the model can use them.</li>
-        <li>Numeric features were standardized so large ranges do not dominate the model.</li>
+        <li>Numeric features were standardized so large ranges don&apos;t dominate the model.</li>
       </ul>
       {(train || test) && (
         <p className="text-sm text-secondary-foreground">
@@ -668,13 +729,13 @@ const PreprocessExplanation = ({
           {test ? test.toLocaleString() : "?"} rows to test how well the model performs on new data.
         </p>
       )}
-      {integrityOK && <p className="text-sm font-medium text-primary">Dataset integrity preserved (0 rows dropped)</p>}
+      {integrityOK && <p className="text-sm font-medium text-primary">✔ Dataset integrity preserved (0 rows dropped)</p>}
       <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
         {["Raw data", "Clean missing values", "Convert categories", "Prepare numeric columns", "Train/Test split"].map(
           (step, index, arr) => (
             <div key={step} className="flex items-center gap-1">
               <span className="rounded bg-secondary px-2 py-1">{step}</span>
-              {index < arr.length - 1 && <span className="text-muted-foreground">-&gt;</span>}
+              {index < arr.length - 1 && <span className="text-muted-foreground">→</span>}
             </div>
           ),
         )}
