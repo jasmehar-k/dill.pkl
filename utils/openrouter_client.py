@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from typing import Any, Optional
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -117,26 +118,158 @@ class OpenRouterClient:
             temperature=temperature,
             max_tokens=max_tokens,
         )
-        return self._extract_json_object(response_text)
+        try:
+            return self._extract_json_object(response_text)
+        except Exception as exc:
+            self._logger.warning(
+                "OpenRouter JSON parse failed. Raw response (truncated): %s",
+                self._truncate_for_log(response_text),
+            )
+            raise RuntimeError(str(exc)) from exc
 
     def _extract_json_object(self, text: str) -> dict[str, Any]:
         """Extract a JSON object from a model response."""
-        stripped = text.strip()
+        stripped = self._normalize_json_text(text)
+        candidates: list[str] = []
 
+        candidates.append(stripped)
+        fence_stripped = self._strip_code_fences(stripped)
+        if fence_stripped != stripped:
+            candidates.append(fence_stripped)
+
+        balanced_object = self._find_balanced_object(stripped)
+        if balanced_object:
+            candidates.append(balanced_object)
+
+        if fence_stripped != stripped:
+            fenced_balanced = self._find_balanced_object(fence_stripped)
+            if fenced_balanced:
+                candidates.append(fenced_balanced)
+
+        parse_errors: list[str] = []
+        for candidate in self._dedupe_candidates(candidates):
+            payload = self._try_parse_json_object(candidate, parse_errors)
+            if payload is not None:
+                return payload
+
+            repaired = self._repair_common_json_issues(candidate)
+            if repaired != candidate:
+                payload = self._try_parse_json_object(repaired, parse_errors)
+                if payload is not None:
+                    return payload
+
+        if parse_errors:
+            raise RuntimeError(f"OpenRouter returned malformed JSON: {parse_errors[-1]}")
+
+        raise RuntimeError(f"OpenRouter did not return JSON: {stripped}")
+
+    def _normalize_json_text(self, text: str) -> str:
+        """Normalize common model response wrappers before JSON extraction."""
+        normalized = text.lstrip("\ufeff").strip()
+
+        # Handle responses like: "json\n{...}" or "JSON: {...}"
+        lowered = normalized.lower()
+        if lowered.startswith("json"):
+            remainder = normalized[4:]
+            normalized = remainder.lstrip(" :\n\r\t")
+
+        # Handle opening fence even if closing fence is missing.
+        if normalized.startswith("```"):
+            lines = normalized.splitlines()
+            if lines:
+                normalized = "\n".join(lines[1:]).strip()
+
+        return normalized
+
+    def _try_parse_json_object(
+        self,
+        text: str,
+        parse_errors: list[str],
+    ) -> Optional[dict[str, Any]]:
+        """Attempt to parse text as a JSON object."""
         try:
-            payload = json.loads(stripped)
+            payload = json.loads(text)
             if isinstance(payload, dict):
                 return payload
-        except json.JSONDecodeError:
-            pass
+            parse_errors.append("JSON payload was not an object")
+            return None
+        except json.JSONDecodeError as exc:
+            parse_errors.append(str(exc))
+            return None
 
-        start = stripped.find("{")
-        end = stripped.rfind("}")
-        if start == -1 or end == -1 or end <= start:
-            raise RuntimeError(f"OpenRouter did not return JSON: {stripped}")
+    def _strip_code_fences(self, text: str) -> str:
+        """Strip markdown code fences if present."""
+        stripped = text.strip()
+        if not stripped.startswith("```"):
+            return stripped
 
-        candidate = stripped[start : end + 1]
-        payload = json.loads(candidate)
-        if not isinstance(payload, dict):
-            raise RuntimeError("OpenRouter JSON response was not an object")
-        return payload
+        lines = stripped.splitlines()
+        if len(lines) < 3:
+            return stripped
+
+        if lines[0].startswith("```") and lines[-1].strip() == "```":
+            return "\n".join(lines[1:-1]).strip()
+
+        # If closing fence is missing, still remove the opening fence line.
+        if lines[0].startswith("```"):
+            return "\n".join(lines[1:]).strip()
+
+        return stripped
+
+    def _find_balanced_object(self, text: str) -> Optional[str]:
+        """Find the first balanced JSON object in text."""
+        start = text.find("{")
+        if start == -1:
+            return None
+
+        depth = 0
+        in_string = False
+        escape = False
+
+        for index, char in enumerate(text[start:], start=start):
+            if in_string:
+                if escape:
+                    escape = False
+                elif char == "\\":
+                    escape = True
+                elif char == '"':
+                    in_string = False
+                continue
+
+            if char == '"':
+                in_string = True
+            elif char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+                if depth == 0:
+                    return text[start : index + 1]
+
+        return None
+
+    def _repair_common_json_issues(self, text: str) -> str:
+        """Repair common model JSON formatting issues deterministically."""
+        repaired = text
+        repaired = repaired.replace("\u201c", '"').replace("\u201d", '"')
+        repaired = repaired.replace("\u2018", "'").replace("\u2019", "'")
+        repaired = re.sub(r",\s*([}\]])", r"\1", repaired)
+        repaired = re.sub(r"\n\s*```.*$", "", repaired, flags=re.MULTILINE)
+        return repaired.strip()
+
+    def _dedupe_candidates(self, candidates: list[str]) -> list[str]:
+        """Return candidates preserving order and removing duplicates."""
+        seen: set[str] = set()
+        unique: list[str] = []
+        for item in candidates:
+            if not item or item in seen:
+                continue
+            seen.add(item)
+            unique.append(item)
+        return unique
+
+    def _truncate_for_log(self, text: str, max_chars: int = 4000) -> str:
+        """Trim long LLM payloads for readable logs."""
+        normalized = text.replace("\n", "\\n")
+        if len(normalized) <= max_chars:
+            return normalized
+        return normalized[:max_chars] + "... [truncated]"

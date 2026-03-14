@@ -260,23 +260,13 @@ class ExplanationGeneratorAgent(BaseAgent):
             reverse=True,
         )[:8]
 
-        payload = {
-            "task_type": evaluation_result.get("task_type", "classification"),
-            "deployment_decision": evaluation_result.get("deployment_decision"),
-            "performance_summary": evaluation_result.get("performance_summary"),
-            "metrics": {
-                "accuracy": evaluation_result.get("accuracy"),
-                "precision": evaluation_result.get("precision"),
-                "recall": evaluation_result.get("recall"),
-                "f1": evaluation_result.get("f1"),
-                "r2": evaluation_result.get("r2"),
-                "rmse": evaluation_result.get("rmse"),
-            },
-            "top_features": top_features,
-            "fallback_explanations": fallback_explanations,
-            "fallback_summary": fallback_summary,
-            "pipeline_context": pipeline_context or {},
-        }
+        payload = self._build_compact_llm_payload(
+            evaluation_result=evaluation_result,
+            top_features=top_features,
+            fallback_explanations=fallback_explanations,
+            fallback_summary=fallback_summary,
+            pipeline_context=pipeline_context,
+        )
 
         response = self._generate_llm_json(
             system_prompt=(
@@ -312,3 +302,90 @@ class ExplanationGeneratorAgent(BaseAgent):
             "explanations": clean_explanations[:4],
             "summary": summary,
         }
+
+    def _build_compact_llm_payload(
+        self,
+        *,
+        evaluation_result: dict[str, Any],
+        top_features: list[tuple[str, float]],
+        fallback_explanations: list[str],
+        fallback_summary: str,
+        pipeline_context: Optional[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Build a compact payload for LLM calls to avoid token overflow."""
+        compact_context = self._summarize_pipeline_context(pipeline_context or {})
+        compact_fallback = self._truncate_list(fallback_explanations, max_items=4, max_chars=300)
+        compact_summary = self._truncate_text(fallback_summary, max_chars=600)
+
+        return {
+            "task_type": evaluation_result.get("task_type", "classification"),
+            "deployment_decision": evaluation_result.get("deployment_decision"),
+            "performance_summary": self._truncate_text(
+                str(evaluation_result.get("performance_summary") or ""),
+                max_chars=400,
+            ),
+            "metrics": {
+                "accuracy": evaluation_result.get("accuracy"),
+                "precision": evaluation_result.get("precision"),
+                "recall": evaluation_result.get("recall"),
+                "f1": evaluation_result.get("f1"),
+                "r2": evaluation_result.get("r2"),
+                "rmse": evaluation_result.get("rmse"),
+            },
+            "top_features": top_features[:8],
+            "fallback_explanations": compact_fallback,
+            "fallback_summary": compact_summary,
+            "pipeline_context": compact_context,
+        }
+
+    def _summarize_pipeline_context(self, pipeline_context: dict[str, Any]) -> dict[str, Any]:
+        """Summarize pipeline context to avoid large prompt payloads."""
+        summary: dict[str, Any] = {}
+
+        if not isinstance(pipeline_context, dict):
+            return summary
+
+        dataset = pipeline_context.get("dataset")
+        if dataset:
+            summary["dataset"] = str(dataset)
+        target = pipeline_context.get("target_column")
+        if target:
+            summary["target_column"] = str(target)
+        task_type = pipeline_context.get("task_type")
+        if task_type:
+            summary["task_type"] = str(task_type)
+
+        model_selection = pipeline_context.get("model_selection")
+        if isinstance(model_selection, dict):
+            selected_model = model_selection.get("selected_model")
+            if selected_model:
+                summary["selected_model"] = str(selected_model)
+
+        training = pipeline_context.get("training")
+        if isinstance(training, dict):
+            best_score = training.get("best_score")
+            if best_score is not None:
+                summary["best_cv_score"] = best_score
+            training_mode = training.get("training_mode")
+            if training_mode:
+                summary["training_mode"] = str(training_mode)
+
+        evaluation = pipeline_context.get("evaluation")
+        if isinstance(evaluation, dict):
+            decision = evaluation.get("deployment_decision")
+            if decision:
+                summary["deployment_decision"] = str(decision)
+
+        return summary
+
+    def _truncate_text(self, text: str, max_chars: int) -> str:
+        """Truncate text to a safe length for prompts."""
+        clean = str(text or "").strip()
+        if len(clean) <= max_chars:
+            return clean
+        return clean[: max(0, max_chars - 3)].rstrip() + "..."
+
+    def _truncate_list(self, items: list[str], max_items: int, max_chars: int) -> list[str]:
+        """Truncate a list of strings by item count and per-item length."""
+        trimmed = [self._truncate_text(str(item), max_chars) for item in items[:max_items]]
+        return [item for item in trimmed if item]

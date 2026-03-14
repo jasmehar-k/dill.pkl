@@ -47,6 +47,15 @@ class Settings(BaseSettings):
     default_random_state: int = Field(default=42, description="Default random seed")
     default_cv_folds: int = Field(default=5, description="Default cross-validation folds")
 
+    # Advanced AutoML settings
+    enable_multi_model: bool = Field(default=True, description="Enable multi-model comparison")
+    enable_hpo: bool = Field(default=True, description="Enable hyperparameter optimization with Optuna")
+    enable_ensemble: bool = Field(default=False, description="Enable ensemble building")
+    ensemble_type: str = Field(default="stacking", description="Ensemble type: voting or stacking")
+    ensemble_top_k: int = Field(default=3, description="Number of top models for ensemble")
+    n_hpo_trials: int = Field(default=20, description="Number of Optuna HPO trials")
+    parallel_training: bool = Field(default=True, description="Enable parallel model training")
+
 
 settings = Settings()
 

@@ -213,6 +213,8 @@ const StageDetailPanel = ({
                     </div>
                   )}
 
+                  {stage.id === "training" && buildTrainingComparisonPanel(stageResult)}
+
                   {isModelSelection && buildModelSelectionPanel(stageResult)}
 
                   {isPreprocessing ? (
@@ -439,7 +441,17 @@ const buildHighlights = (
         },
       ];
     case "model_selection":
-      return [{ label: "Selected model", value: String(stageResult?.selected_model ?? "Pending") }];
+      return [
+        {
+          label: "Candidate set",
+          value: String(
+            ((stageResult?.top_candidates as Array<Record<string, unknown>> | undefined) || [])
+              .map((item) => String(item.model_name ?? ""))
+              .filter(Boolean)
+              .join(", ") || "Pending",
+          ),
+        },
+      ];
     case "training":
       return [
         { label: "Selected model", value: String(stageResult?.model_name ?? metrics?.model_name ?? "Pending") },
@@ -534,19 +546,33 @@ const PARAM_HINTS: Record<string, string> = {
 
 const formatNumber = (value: number) => value.toLocaleString();
 
+const getTopCandidates = (stageResult: Record<string, unknown> | null) =>
+  ((stageResult?.top_candidates as Array<Record<string, unknown>> | undefined) || []).slice(0, 3);
+
 const getSelectedModel = (stageResult: Record<string, unknown> | null) =>
-  String(stageResult?.selected_model ?? "");
+  String(getTopCandidates(stageResult)[0]?.model_name ?? "");
 
 const getCandidates = (stageResult: Record<string, unknown> | null) =>
-  (stageResult?.candidate_models as string[] | undefined) || [];
+  getTopCandidates(stageResult).map((candidate) => String(candidate.model_name ?? "")).filter(Boolean);
 
 const getSignals = (stageResult: Record<string, unknown> | null) =>
   (stageResult?.analysis_signals as Record<string, unknown> | undefined) || {};
 
 const getParamEntries = (stageResult: Record<string, unknown> | null) => {
-  const params = stageResult?.hyperparameters as Record<string, unknown> | undefined;
+  const topCandidate = getTopCandidates(stageResult)[0];
+  const params = topCandidate?.fixed_params as Record<string, unknown> | undefined;
   if (!params) return [];
   return Object.entries(params).sort(([a], [b]) => a.localeCompare(b));
+};
+
+const getModelComparisons = (stageResult: Record<string, unknown> | null) =>
+  (stageResult?.model_comparisons as Array<Record<string, unknown>> | undefined) || [];
+
+const formatComparisonParams = (params: Record<string, unknown> | undefined) => {
+  if (!params) return "Default params";
+  const entries = Object.entries(params).slice(0, 3);
+  if (entries.length === 0) return "Default params";
+  return entries.map(([key, value]) => `${key}=${String(value)}`).join(", ");
 };
 
 const describeDatasetSize = (nSamples: number) => {
@@ -592,6 +618,7 @@ const buildModelSelectionPanel = (stageResult: Record<string, unknown> | null) =
   if (!stageResult) return null;
 
   const selectedModel = getSelectedModel(stageResult);
+  const topCandidates = getTopCandidates(stageResult);
   const candidates = getCandidates(stageResult);
   const params = getParamEntries(stageResult);
   const signals = getSignals(stageResult);
@@ -605,20 +632,21 @@ const buildModelSelectionPanel = (stageResult: Record<string, unknown> | null) =
   const explanation = MODEL_EXPLANATIONS[selectedModel] || "This model was selected as the best fit for the dataset.";
   const complexity = buildComplexity(nSamples, selectedModel);
   const llmSummary = String(stageResult.llm_summary ?? "").trim();
+  const selectionReasoning = String(stageResult.selection_reasoning ?? "").trim();
 
   return (
     <div className="space-y-4">
       <div className="grid gap-3 md:grid-cols-2">
         <div className="glass-card space-y-2 p-4">
-          <h3 className="text-sm font-medium text-accent">Selected model</h3>
+          <h3 className="text-sm font-medium text-accent">Candidate set</h3>
           <div className="flex items-center gap-2">
             <span className="rounded-md bg-accent/10 px-2 py-1 font-mono text-[12px] text-accent">
-              {selectedModel || "Pending"}
+              {topCandidates.map((candidate) => String(candidate.model_name ?? "")).filter(Boolean).join(", ") || "Pending"}
             </span>
           </div>
         </div>
         <div className="glass-card space-y-2 p-4">
-          <h3 className="text-sm font-medium text-accent">About {selectedModel || "this model"}</h3>
+          <h3 className="text-sm font-medium text-accent">About this candidate set</h3>
           <p className="text-[11px] text-secondary-foreground">{explanation}</p>
         </div>
       </div>
@@ -630,23 +658,32 @@ const buildModelSelectionPanel = (stageResult: Record<string, unknown> | null) =
         </div>
       )}
 
+      {selectionReasoning && (
+        <div className="glass-card p-4 text-[11px] text-secondary-foreground">{selectionReasoning}</div>
+      )}
+
       <div className="glass-card space-y-2 p-4">
         <h3 className="text-sm font-medium text-accent">Candidate models</h3>
         <div className="space-y-2">
           {candidates.length > 0 ? (
-            candidates.map((candidate) => (
-              <div key={candidate} className="flex items-center justify-between rounded-lg bg-secondary/50 px-3 py-2 text-xs">
+            topCandidates.map((candidate, index) => {
+              const candidateName = String(candidate.model_name ?? "");
+              const candidateFamily = String(candidate.model_family ?? "other").split("_").join(" ");
+              const candidateReasoning = String(candidate.reasoning ?? "") || buildNotChosenReason(candidateName, selectedModel, nSamples);
+              return (
+              <div key={candidateName} className="flex items-center justify-between rounded-lg bg-secondary/50 px-3 py-2 text-xs">
                 <div className="flex items-center gap-2">
-                  <span className={`text-[10px] ${candidate === selectedModel ? "text-accent" : "text-muted-foreground"}`}>
-                    {candidate === selectedModel ? "✓" : "•"}
+                  <span className="text-[10px] text-muted-foreground">
+                    #{index + 1}
                   </span>
-                  <span className="font-mono text-[11px] text-foreground">{candidate}</span>
+                  <span className="font-mono text-[11px] text-foreground">{candidateName}</span>
+                  <span className="text-[10px] text-muted-foreground">({candidateFamily})</span>
                 </div>
                 <span className="text-[10px] text-muted-foreground">
-                  {buildNotChosenReason(candidate, selectedModel, nSamples)}
+                  {candidateReasoning}
                 </span>
               </div>
-            ))
+            );})
           ) : (
             <p className="text-xs text-muted-foreground">Candidate models will appear after selection runs.</p>
           )}
@@ -740,6 +777,53 @@ const buildModelSelectionPanel = (stageResult: Record<string, unknown> | null) =
             <p className="font-mono text-foreground">{complexity.memory}</p>
           </div>
         </div>
+      </div>
+    </div>
+  );
+};
+
+const buildTrainingComparisonPanel = (stageResult: Record<string, unknown> | null) => {
+  if (!stageResult) return null;
+
+  const comparisons = getModelComparisons(stageResult);
+  const trainingMode = String(stageResult.training_mode || "");
+  const hasComparisons = comparisons.length > 0;
+
+  if (!hasComparisons && trainingMode !== "multi_model") {
+    return null;
+  }
+
+  return (
+    <div className="space-y-3">
+      <h3 className="text-sm font-medium text-accent">Model comparison</h3>
+      <div className="glass-card space-y-2 p-4 text-[11px] text-secondary-foreground">
+        {hasComparisons ? (
+          <div className="space-y-2">
+            {comparisons.map((item, index) => {
+              const modelName = String(item.model_name || "Model");
+              const cvMean = typeof item.cv_mean === "number" ? item.cv_mean : null;
+              const cvStd = typeof item.cv_std === "number" ? item.cv_std : null;
+              const params = item.hyperparameters as Record<string, unknown> | undefined;
+              return (
+                <div key={`${modelName}-${index}`} className="rounded-lg bg-secondary/50 px-3 py-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="font-mono text-[11px] text-foreground">{modelName}</span>
+                    <span className="text-[10px] text-muted-foreground">
+                      CV {cvMean !== null ? cvMean.toFixed(3) : "n/a"} ± {cvStd !== null ? cvStd.toFixed(3) : "n/a"}
+                    </span>
+                  </div>
+                  <div className="mt-1 text-[10px] text-muted-foreground">
+                    Params: {formatComparisonParams(params)}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <p className="text-xs text-muted-foreground">
+            Multi-model comparison is enabled, but results are not available yet.
+          </p>
+        )}
       </div>
     </div>
   );

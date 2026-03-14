@@ -59,10 +59,9 @@ class ModelSelectionAgent(BaseAgent):
 
         Returns:
             Dictionary containing model selection results including:
-            - selected_model
-            - candidate_models
-            - model_recommendations
-            - hyperparameters
+            - top_candidates (up to 3 concrete algorithms with equal weighting)
+            - selection_reasoning
+            - candidate-level fixed params and search spaces
         """
         try:
             logger.info(f"Selecting models for {task_type} task")
@@ -91,35 +90,53 @@ class ModelSelectionAgent(BaseAgent):
                 analysis=analysis_metrics,
             )
 
-            # Select best model
-            selected_model = candidate_models[0] if candidate_models else "RandomForest"
+            limited_candidates = candidate_models[:3]
 
-            # Generate hyperparameters for selected model
-            hyperparameters = self._get_default_hyperparameters(
-                selected_model,
-                n_samples,
-                task_type,
-            )
-
-            # Generate reasoning
-            reasoning = self._generate_reasoning(
+            selection_reasoning = self._generate_reasoning(
                 n_samples=n_samples,
                 n_features=n_features,
                 task_type=task_type,
                 class_balance=min_class_ratio,
-                selected_model=selected_model,
+                candidate_models=limited_candidates,
                 analysis=analysis_metrics if analysis else {},
             )
+
+            total_candidates = max(1, len(limited_candidates))
+
+            top_candidates = [
+                self._build_candidate_payload(
+                    model_name=model_name,
+                    priority=index + 1,
+                    total_candidates=total_candidates,
+                    n_samples=n_samples,
+                    task_type=task_type,
+                    class_balance=min_class_ratio,
+                    analysis=analysis_metrics if analysis else {},
+                )
+                for index, model_name in enumerate(limited_candidates)
+            ]
+
+            if not top_candidates:
+                top_candidates = [
+                    self._build_candidate_payload(
+                        model_name="RandomForest",
+                        priority=1,
+                        total_candidates=1,
+                        n_samples=n_samples,
+                        task_type=task_type,
+                        class_balance=min_class_ratio,
+                        analysis=analysis_metrics if analysis else {},
+                    )
+                ]
 
             llm_selection = self._generate_llm_selection(
                 n_samples=n_samples,
                 n_features=n_features,
                 task_type=task_type,
                 class_balance=min_class_ratio,
-                candidate_models=candidate_models,
-                default_model=selected_model,
-                default_hyperparameters=hyperparameters,
-                default_reasoning=reasoning,
+                candidate_models=limited_candidates,
+                default_candidates=top_candidates,
+                default_reasoning=selection_reasoning,
                 target_column=target_column,
                 selected_features=features.get("selected_features", []),
                 analysis=analysis_metrics if analysis else {},
@@ -129,42 +146,45 @@ class ModelSelectionAgent(BaseAgent):
 
             if not llm_selection:
                 print("Model selection LLM did not return a result; falling back to default selection.")
-                # Treat defaults as the LLM selection to keep selection source consistent.
                 llm_selection = {
-                    "selected_model": selected_model,
-                    "hyperparameters": hyperparameters,
-                    "reasoning": reasoning,
+                    "top_candidates": top_candidates,
+                    "selection_reasoning": selection_reasoning,
                 }
             else:
                 print("Model selection LLM returned a result; using LLM selection.")
 
-            selected_model = llm_selection.get("selected_model", selected_model)
-            hyperparameters = llm_selection.get("hyperparameters", hyperparameters)
-            reasoning = llm_selection.get("reasoning", reasoning)
+            merged_candidates = self._merge_candidate_selection(
+                default_candidates=top_candidates,
+                llm_candidates=llm_selection.get("top_candidates"),
+                candidate_models=limited_candidates,
+                n_samples=n_samples,
+                task_type=task_type,
+                class_balance=min_class_ratio,
+                analysis=analysis_metrics if analysis else {},
+            )
+            selection_reasoning = str(llm_selection.get("selection_reasoning") or selection_reasoning)
 
             llm_summary = self._generate_llm_summary(
                 n_samples=n_samples,
                 n_features=n_features,
                 task_type=task_type,
                 class_balance=min_class_ratio,
-                candidate_models=candidate_models,
-                selected_model=selected_model,
-                hyperparameters=hyperparameters,
-                reasoning=reasoning,
+                candidate_models=[candidate["model_name"] for candidate in merged_candidates],
+                selected_model=merged_candidates[0]["model_name"] if merged_candidates else "RandomForest",
+                top_candidates=merged_candidates,
+                reasoning=selection_reasoning,
                 target_column=target_column,
                 selected_features=features.get("selected_features", []),
                 analysis=analysis_metrics if analysis else {},
             )
 
             result = {
-                "selected_model": selected_model,
-                "candidate_models": candidate_models,
-                "reasoning": reasoning,
-                "hyperparameters": hyperparameters,
+                "top_candidates": merged_candidates,
+                "selection_reasoning": selection_reasoning,
                 "task_type": task_type,
                 "n_samples": n_samples,
                 "n_features": n_features,
-                "selection_source": "llm" if llm_selection else "heuristic",
+                "selection_source": "llm" if llm_returned else "heuristic",
                 "selected_features": features.get("selected_features", []),
                 "feature_scores": features.get("feature_scores", {}),
                 "applied_transformations": features.get("applied_transformations", []),
@@ -175,7 +195,8 @@ class ModelSelectionAgent(BaseAgent):
                 "class_balance": min_class_ratio,
             }
 
-            logger.info(f"Model selection complete: {selected_model}")
+            selected_name = merged_candidates[0]["model_name"] if merged_candidates else "RandomForest"
+            logger.info(f"Model selection complete: candidate set includes {selected_name}")
             return result
 
         except Exception as e:
@@ -261,13 +282,13 @@ class ModelSelectionAgent(BaseAgent):
             if n_samples < 1000:
                 candidates.extend(["LogisticRegression", "SVM", "RandomForest"])
             elif n_samples < 10000:
-                candidates.extend(["RandomForest", "GradientBoosting", "LogisticRegression"])
+                candidates.extend(["RandomForest", "GradientBoosting", "XGBoost", "LightGBM"])
             else:
-                candidates.extend(["RandomForest", "GradientBoosting", "XGBoost"])
+                candidates.extend(["RandomForest", "GradientBoosting", "XGBoost", "LightGBM"])
 
             # Adjust for class imbalance
             if class_balance < 0.1:
-                candidates.extend(["XGBoost", "RandomForest"])
+                candidates.extend(["XGBoost", "LightGBM", "RandomForest"])
 
             # Adjust for high-dimensional sparse data (features >> samples)
             if is_high_dimensional:
@@ -280,11 +301,11 @@ class ModelSelectionAgent(BaseAgent):
             # Adjust for high correlations - avoid models sensitive to multicollinearity
             if has_high_correlations:
                 # Tree-based models are more robust
-                candidates.extend(["RandomForest", "GradientBoosting"])
+                candidates.extend(["RandomForest", "GradientBoosting", "LightGBM"])
 
             # Adjust for high missing values - prefer models robust to missing data
             if has_high_missing:
-                candidates.extend(["RandomForest", "GradientBoosting"])
+                candidates.extend(["RandomForest", "GradientBoosting", "LightGBM"])
 
             # Adjust for outliers - avoid SVM
             if has_outliers:
@@ -295,9 +316,9 @@ class ModelSelectionAgent(BaseAgent):
             if n_samples < 1000:
                 candidates.extend(["Ridge", "SVR", "RandomForest"])
             elif n_samples < 10000:
-                candidates.extend(["RandomForest", "GradientBoosting", "Ridge"])
+                candidates.extend(["RandomForest", "GradientBoosting", "XGBoost", "Ridge"])
             else:
-                candidates.extend(["RandomForest", "GradientBoosting", "XGBoost"])
+                candidates.extend(["RandomForest", "GradientBoosting", "XGBoost", "LightGBM"])
 
             # Adjust for high-dimensional sparse data
             if is_high_dimensional:
@@ -305,15 +326,52 @@ class ModelSelectionAgent(BaseAgent):
 
             # Adjust for high correlations
             if has_high_correlations:
-                candidates.extend(["Ridge"])
+                candidates.extend(["Ridge", "LightGBM"])
 
             # Adjust for outliers
             if has_outliers:
                 if "SVR" in candidates:
                     candidates.remove("SVR")
-                candidates.extend(["RandomForest", "GradientBoosting"])
+                candidates.extend(["RandomForest", "GradientBoosting", "LightGBM"])
 
         return list(dict.fromkeys(candidates))
+
+    def _build_candidate_payload(
+        self,
+        model_name: str,
+        priority: int,
+        total_candidates: int,
+        n_samples: int,
+        task_type: str,
+        class_balance: float,
+        analysis: Optional[dict[str, Any]],
+        fixed_params_override: Optional[dict[str, Any]] = None,
+        search_space_override: Optional[dict[str, Any]] = None,
+        reasoning_override: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """Build a normalized candidate payload for training handoff."""
+        fixed_params = self._get_default_hyperparameters(model_name, n_samples, task_type)
+        if isinstance(fixed_params_override, dict):
+            fixed_params.update(self._sanitize_hyperparameters(model_name, fixed_params_override, task_type))
+
+        candidate_search_space = self._get_search_space_for_model(model_name)
+        if isinstance(search_space_override, dict) and search_space_override:
+            candidate_search_space = self._sanitize_search_space(search_space_override)
+
+        return {
+            "priority": priority,
+            "candidate_weight": round(1.0 / max(1, total_candidates), 4),
+            "model_name": model_name,
+            "model_family": self._resolve_model_family(model_name),
+            "reasoning": reasoning_override or self._build_candidate_reasoning(
+                model_name=model_name,
+                class_balance=class_balance,
+                task_type=task_type,
+                analysis=analysis,
+            ),
+            "fixed_params": fixed_params,
+            "search_space": candidate_search_space,
+        }
 
     def _get_default_hyperparameters(
         self,
@@ -345,8 +403,16 @@ class ModelSelectionAgent(BaseAgent):
                 "n_estimators": 100,
                 "max_depth": 6,
                 "learning_rate": 0.1,
-                "use_label_encoder": False,
                 "eval_metric": "logloss",
+            }
+        elif model_name == "LightGBM":
+            return {
+                **base_params,
+                "n_estimators": 100,
+                "max_depth": 8,
+                "learning_rate": 0.1,
+                "num_leaves": 31,
+                "verbose": -1,
             }
         elif model_name == "LogisticRegression":
             return {
@@ -367,7 +433,7 @@ class ModelSelectionAgent(BaseAgent):
         n_features: int,
         task_type: str,
         class_balance: float,
-        selected_model: str,
+        candidate_models: list[str],
         analysis: Optional[dict[str, Any]] = None,
     ) -> str:
         """Generate reasoning for model selection."""
@@ -393,7 +459,12 @@ class ModelSelectionAgent(BaseAgent):
         if class_balance < 0.1 and task_type == "classification":
             reasoning_parts.append("Class imbalance detected - ensemble methods recommended.")
 
-        reasoning_parts.append(f"Selected {selected_model} as the primary model.")
+        if candidate_models:
+            reasoning_parts.append(
+                "Selected a balanced candidate set with equal priority weighting: "
+                + ", ".join(candidate_models)
+                + "."
+            )
 
         return " ".join(reasoning_parts)
 
@@ -405,8 +476,7 @@ class ModelSelectionAgent(BaseAgent):
         task_type: str,
         class_balance: float,
         candidate_models: list[str],
-        default_model: str,
-        default_hyperparameters: dict[str, Any],
+        default_candidates: list[dict[str, Any]],
         default_reasoning: str,
         target_column: str,
         selected_features: list[str],
@@ -421,8 +491,7 @@ class ModelSelectionAgent(BaseAgent):
             "class_balance": class_balance,
             "candidate_models": candidate_models,
             "selected_features_preview": selected_features[:15],
-            "default_model": default_model,
-            "default_hyperparameters": default_hyperparameters,
+            "default_candidates": default_candidates,
             "default_reasoning": default_reasoning,
         }
 
@@ -442,10 +511,12 @@ class ModelSelectionAgent(BaseAgent):
         response = self._generate_llm_json(
             system_prompt=(
                 "You are an AutoML model-selection assistant. "
-                "Choose the best model ONLY from the provided candidate_models list and return JSON with keys "
-                "'selected_model', 'hyperparameters', and 'reasoning'. "
-                "Use only constructor-safe hyperparameters for the chosen model. "
-                "Be conservative and practical. "
+                "Return JSON with keys 'top_candidates' and 'selection_reasoning'. "
+                "top_candidates must be an ordered list with up to 3 items where each item has: "
+                "'model_name', 'reasoning', 'fixed_params', and optional 'search_space'. "
+                "Choose models ONLY from candidate_models. Treat all returned candidates as equally weighted options "
+                "and avoid language that labels one model as the primary winner. "
+                "Use constructor-safe hyperparameters. "
                 "Consider data characteristics: high correlations favor tree models, "
                 "high dimensionality favors regularized linear models, "
                 "outliers favor tree-based models over SVM."
@@ -458,30 +529,34 @@ class ModelSelectionAgent(BaseAgent):
         if not response:
             return None
 
-        proposed_model = str(response.get("selected_model") or default_model)
-        if proposed_model not in candidate_models:
-            proposed_model = default_model
+        raw_top_candidates = response.get("top_candidates")
+        if not isinstance(raw_top_candidates, list):
+            return None
 
-        merged_hyperparameters = self._get_default_hyperparameters(
-            proposed_model,
-            n_samples,
-            task_type,
-        )
-        raw_hyperparameters = response.get("hyperparameters", {})
-        if isinstance(raw_hyperparameters, dict):
-            merged_hyperparameters.update(
-                self._sanitize_hyperparameters(
-                    proposed_model,
-                    raw_hyperparameters,
-                    task_type,
-                )
+        llm_candidates: list[dict[str, Any]] = []
+        for index, item in enumerate(raw_top_candidates[:3]):
+            if not isinstance(item, dict):
+                continue
+            proposed_model = str(item.get("model_name") or "").strip()
+            if proposed_model not in candidate_models:
+                continue
+            llm_candidates.append(
+                {
+                    "priority": index + 1,
+                    "model_name": proposed_model,
+                    "reasoning": str(item.get("reasoning") or "").strip(),
+                    "fixed_params": item.get("fixed_params", {}),
+                    "search_space": item.get("search_space", {}),
+                }
             )
 
-        reasoning = str(response.get("reasoning") or default_reasoning)
+        if not llm_candidates:
+            return None
+
+        reasoning = str(response.get("selection_reasoning") or default_reasoning)
         return {
-            "selected_model": proposed_model,
-            "hyperparameters": merged_hyperparameters,
-            "reasoning": reasoning,
+            "top_candidates": llm_candidates,
+            "selection_reasoning": reasoning,
         }
 
     def _generate_llm_summary(
@@ -493,7 +568,7 @@ class ModelSelectionAgent(BaseAgent):
         class_balance: float,
         candidate_models: list[str],
         selected_model: str,
-        hyperparameters: dict[str, Any],
+        top_candidates: list[dict[str, Any]],
         reasoning: str,
         target_column: str,
         selected_features: list[str],
@@ -508,7 +583,7 @@ class ModelSelectionAgent(BaseAgent):
             "class_balance": class_balance,
             "candidate_models": candidate_models,
             "selected_model": selected_model,
-            "hyperparameters": hyperparameters,
+            "top_candidates": top_candidates,
             "reasoning": reasoning,
             "selected_features_preview": selected_features[:12],
         }
@@ -527,8 +602,8 @@ class ModelSelectionAgent(BaseAgent):
 
         summary = self._generate_llm_text(
             system_prompt=(
-                "You are an AutoML assistant. Write a concise 2-4 sentence summary explaining why the selected model "
-                "fits this dataset and target. Be specific to the dataset characteristics and task, avoid generic advice."
+                "You are an AutoML assistant. Write a concise 2-4 sentence summary explaining why the candidate set "
+                "collectively fits this dataset and target. Discuss candidates comparably and avoid declaring a single winner."
             ),
             user_prompt=f"Model selection context:\n{self._safe_json(payload)}",
             temperature=0.2,
@@ -539,9 +614,160 @@ class ModelSelectionAgent(BaseAgent):
             return summary
 
         return (
-            f"Selected {selected_model} for a {task_type} task with {n_samples} samples and {n_features} features. "
+            f"Prepared an equally weighted candidate set for a {task_type} task with {n_samples} samples and {n_features} features. "
             f"{reasoning}"
         )
+
+    def _merge_candidate_selection(
+        self,
+        default_candidates: list[dict[str, Any]],
+        llm_candidates: Any,
+        candidate_models: list[str],
+        n_samples: int,
+        task_type: str,
+        class_balance: float,
+        analysis: Optional[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Merge LLM candidate details with deterministic defaults."""
+        if not isinstance(llm_candidates, list):
+            return default_candidates
+
+        merged: list[dict[str, Any]] = []
+        for index, item in enumerate(llm_candidates[:3]):
+            if not isinstance(item, dict):
+                continue
+            model_name = str(item.get("model_name") or "").strip()
+            if model_name not in candidate_models:
+                continue
+
+            merged.append(
+                self._build_candidate_payload(
+                    model_name=model_name,
+                    priority=index + 1,
+                    total_candidates=max(1, len(llm_candidates[:3])),
+                    n_samples=n_samples,
+                    task_type=task_type,
+                    class_balance=class_balance,
+                    analysis=analysis,
+                    fixed_params_override=item.get("fixed_params") if isinstance(item.get("fixed_params"), dict) else None,
+                    search_space_override=item.get("search_space") if isinstance(item.get("search_space"), dict) else None,
+                    reasoning_override=str(item.get("reasoning") or "").strip() or None,
+                )
+            )
+
+        if not merged:
+            return default_candidates
+
+        selected_names = {candidate["model_name"] for candidate in merged}
+        fallback_pool = [name for name in candidate_models if name not in selected_names]
+        while len(merged) < 3 and fallback_pool:
+            model_name = fallback_pool.pop(0)
+            merged.append(
+                self._build_candidate_payload(
+                    model_name=model_name,
+                    priority=len(merged) + 1,
+                    total_candidates=3,
+                    n_samples=n_samples,
+                    task_type=task_type,
+                    class_balance=class_balance,
+                    analysis=analysis,
+                )
+            )
+
+        total_candidates = max(1, len(merged))
+        for index, candidate in enumerate(merged, start=1):
+            candidate["priority"] = index
+            candidate["candidate_weight"] = round(1.0 / total_candidates, 4)
+        return merged
+
+    def _resolve_model_family(self, model_name: str) -> str:
+        """Map model names to canonical family labels."""
+        normalized = model_name.lower().replace("-", "").replace("_", "")
+        if "randomforest" in normalized:
+            return "tree_ensemble"
+        if "gradientboosting" in normalized or "xgboost" in normalized or "lightgbm" in normalized:
+            return "boosted_trees"
+        if "logistic" in normalized or "ridge" in normalized:
+            return "linear"
+        if "svm" in normalized or "svr" in normalized:
+            return "kernel"
+        return "other"
+
+    def _build_candidate_reasoning(
+        self,
+        model_name: str,
+        class_balance: float,
+        task_type: str,
+        analysis: Optional[dict[str, Any]] = None,
+    ) -> str:
+        """Generate concise per-candidate rationale."""
+        reasons: list[str] = []
+        family = self._resolve_model_family(model_name)
+
+        reasons.append("Included as one of the equally weighted candidates for this dataset.")
+
+        if family in {"tree_ensemble", "boosted_trees"}:
+            reasons.append("Handles non-linear interactions and mixed feature behavior well.")
+        elif family == "linear":
+            reasons.append("Provides a regularized, interpretable baseline.")
+        elif family == "kernel":
+            reasons.append("Can model non-linear boundaries on moderate-size datasets.")
+
+        if task_type == "classification" and class_balance < 0.1:
+            reasons.append("Suitable for imbalanced classification with weighted settings.")
+
+        if analysis:
+            if analysis.get("has_high_correlations") and family in {"tree_ensemble", "boosted_trees", "linear"}:
+                reasons.append("Robust to correlated predictors.")
+            if analysis.get("has_outliers") and family in {"tree_ensemble", "boosted_trees"}:
+                reasons.append("Less sensitive to outliers than margin-based methods.")
+
+        return " ".join(dict.fromkeys(reasons))
+
+    def _get_search_space_for_model(self, model_name: str) -> dict[str, Any]:
+        """Return tuning search space for a model when available."""
+        try:
+            from core.hyperparameter_optimizer import get_search_space
+
+            return get_search_space(model_name)
+        except Exception:
+            return {}
+
+    def _sanitize_search_space(self, search_space: dict[str, Any]) -> dict[str, Any]:
+        """Keep valid search space entries only."""
+        sanitized: dict[str, Any] = {}
+        for key, value in search_space.items():
+            if not isinstance(value, dict):
+                continue
+            space_type = str(value.get("type", "")).lower()
+            if space_type not in {"int", "float", "categorical"}:
+                continue
+
+            if space_type in {"int", "float"}:
+                low = value.get("low")
+                high = value.get("high")
+                if not isinstance(low, (int, float)) or not isinstance(high, (int, float)):
+                    continue
+                if low >= high:
+                    continue
+                sanitized[key] = {
+                    "type": space_type,
+                    "low": low,
+                    "high": high,
+                    "log": bool(value.get("log", False)),
+                }
+                if "step" in value and isinstance(value["step"], (int, float)):
+                    sanitized[key]["step"] = value["step"]
+            elif space_type == "categorical":
+                choices = value.get("choices")
+                if not isinstance(choices, list) or not choices:
+                    continue
+                sanitized[key] = {
+                    "type": "categorical",
+                    "choices": choices,
+                }
+
+        return sanitized
 
     def _sanitize_hyperparameters(
         self,
@@ -553,7 +779,8 @@ class ModelSelectionAgent(BaseAgent):
         allowed_keys: dict[str, set[str]] = {
             "RandomForest": {"random_state", "n_estimators", "max_depth", "min_samples_split", "min_samples_leaf", "max_features", "class_weight"},
             "GradientBoosting": {"random_state", "n_estimators", "max_depth", "learning_rate", "subsample"},
-            "XGBoost": {"random_state", "n_estimators", "max_depth", "learning_rate", "subsample", "colsample_bytree", "use_label_encoder", "eval_metric"},
+            "XGBoost": {"random_state", "n_estimators", "max_depth", "learning_rate", "subsample", "colsample_bytree", "eval_metric", "min_child_weight", "gamma"},
+            "LightGBM": {"random_state", "n_estimators", "max_depth", "learning_rate", "num_leaves", "subsample", "colsample_bytree", "min_child_samples", "verbose"},
             "LogisticRegression": {"random_state", "max_iter", "C", "class_weight", "solver", "penalty"},
             "Ridge": {"alpha", "random_state"},
             "SVM": {"C", "kernel", "gamma", "class_weight", "probability"},

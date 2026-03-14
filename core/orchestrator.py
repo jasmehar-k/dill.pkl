@@ -17,6 +17,7 @@ from agents.feature_engineering_agent import FeatureEngineeringAgent
 from agents.model_selection_agent import ModelSelectionAgent
 from agents.preprocessor_agent import PreprocessorAgent
 from agents.training_agent import TrainingAgent
+from config import settings
 from core.exceptions import PipelineError
 from core.memory_manager import MemoryManager
 from core.message import Message
@@ -104,6 +105,13 @@ class Orchestrator:
             pipeline_config = {
                 "test_size": test_size,
                 "random_state": random_state,
+                "cv_folds": settings.default_cv_folds,
+                "enable_multi_model": settings.enable_multi_model,
+                "optimize_hyperparameters": settings.enable_hpo,
+                "n_trials_hpo": settings.n_hpo_trials,
+                "enable_ensemble": settings.enable_ensemble,
+                "ensemble_type": settings.ensemble_type,
+                "ensemble_top_k": settings.ensemble_top_k,
             }
 
             # Stage 1: Data Analysis
