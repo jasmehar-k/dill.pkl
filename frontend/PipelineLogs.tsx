@@ -113,7 +113,7 @@ const PipelineLogs = ({
   const metricCards = renderMetricCards();
 
   return (
-    <div className="glass-card overflow-hidden">
+    <div className="glass-card overflow-hidden" data-chat-context-label="Pipeline logs">
       <div className="flex items-center gap-0 border-b border-border/30">
         <button
           onClick={() => setActiveTab("visual")}

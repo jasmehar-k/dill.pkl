@@ -74,6 +74,7 @@ const ResultsPanel = ({ isComplete, metrics, results, explanation }: ResultsPane
   return (
     <motion.div
       className="glass-card space-y-3 p-4"
+      data-chat-context-label="Results panel"
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
     >

@@ -1,11 +1,17 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Bot, MessageCircle, Send, User, X } from "lucide-react";
-import type { MetricsResponse, TaskType } from "@/lib/api";
+import { Bot, MessageCircle, Quote, Send, Sparkles, User, X } from "lucide-react";
+import {
+  queryChat,
+  type ChatSelectionContext,
+  type MetricsResponse,
+  type TaskType,
+} from "@/lib/api";
 
 interface Message {
   role: "user" | "assistant";
   content: string;
+  source?: "llm" | "fallback";
 }
 
 interface ChatBotProps {
@@ -17,66 +23,186 @@ interface ChatBotProps {
   metrics: MetricsResponse | null;
 }
 
-const ChatBot = ({ datasetName, targetColumn, taskType, activeStageId, stageLogs, metrics }: ChatBotProps) => {
+interface FloatingSelection extends ChatSelectionContext {
+  x: number;
+  y: number;
+}
+
+const ChatBot = ({
+  datasetName,
+  targetColumn,
+  taskType,
+  activeStageId,
+  stageLogs,
+  metrics,
+}: ChatBotProps) => {
   const [isOpen, setIsOpen] = useState(false);
   const [messages, setMessages] = useState<Message[]>([
     {
       role: "assistant",
-      content: "I can explain what the pipeline is doing as your dataset moves through each stage.",
+      content: "I can explain your dataset, each pipeline stage, the selected model, and the final results.",
     },
   ]);
   const [input, setInput] = useState("");
+  const [isThinking, setIsThinking] = useState(false);
+  const [pinnedContext, setPinnedContext] = useState<ChatSelectionContext | null>(null);
+  const [floatingSelection, setFloatingSelection] = useState<FloatingSelection | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   const contextSummary = useMemo(() => {
-    const parts = [];
+    const parts: string[] = [];
     if (datasetName) parts.push(`Dataset: ${datasetName}`);
     if (targetColumn) parts.push(`Target: ${targetColumn}`);
     parts.push(`Task: ${taskType}`);
-    if (activeStageId) parts.push(`Active stage: ${activeStageId}`);
-    if (metrics?.performance_summary) parts.push(metrics.performance_summary);
+    if (activeStageId) {
+      parts.push(`Active stage: ${activeStageId}`);
+    } else if (metrics?.model_name) {
+      parts.push(`Model: ${metrics.model_name}`);
+    }
+    if (taskType === "regression" && metrics?.r2 != null && metrics?.rmse != null) {
+      parts.push(`R2 = ${metrics.r2.toFixed(3)}`);
+      parts.push(`RMSE = ${metrics.rmse.toFixed(3)}`);
+    } else if (taskType === "classification" && metrics?.accuracy != null && metrics?.f1 != null) {
+      parts.push(`Accuracy = ${(metrics.accuracy * 100).toFixed(1)}%`);
+      parts.push(`F1 = ${(metrics.f1 * 100).toFixed(1)}%`);
+    }
+    if (metrics?.deployment_decision) parts.push(`Decision: ${metrics.deployment_decision}`);
     return parts.join(" | ");
-  }, [activeStageId, datasetName, metrics?.performance_summary, targetColumn, taskType]);
+  }, [activeStageId, datasetName, metrics, targetColumn, taskType]);
 
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-  }, [messages]);
+  }, [messages, isThinking]);
 
   useEffect(() => {
     setMessages((current) => {
       const next = [...current];
       next[0] = {
         role: "assistant",
-        content: contextSummary || "I can explain what the pipeline is doing as your dataset moves through each stage.",
+        content:
+          contextSummary ||
+          "I can explain your dataset, what each stage did, why the model was chosen, and how to read the final metrics.",
       };
       return next;
     });
   }, [contextSummary]);
 
-  const handleSend = () => {
+  useEffect(() => {
+    const updateSelection = () => {
+      window.requestAnimationFrame(() => {
+        const next = readHighlightedContext(panelRef.current);
+        setFloatingSelection(next);
+      });
+    };
+
+    const clearFloatingSelection = () => {
+      const selection = window.getSelection();
+      if (!selection || selection.isCollapsed || !selection.toString().trim()) {
+        setFloatingSelection(null);
+      }
+    };
+
+    document.addEventListener("mouseup", updateSelection);
+    document.addEventListener("keyup", updateSelection);
+    document.addEventListener("selectionchange", clearFloatingSelection);
+    window.addEventListener("scroll", clearFloatingSelection, true);
+
+    return () => {
+      document.removeEventListener("mouseup", updateSelection);
+      document.removeEventListener("keyup", updateSelection);
+      document.removeEventListener("selectionchange", clearFloatingSelection);
+      window.removeEventListener("scroll", clearFloatingSelection, true);
+    };
+  }, []);
+
+  const handleUseSelection = () => {
+    if (!floatingSelection) return;
+
+    const nextContext = {
+      text: floatingSelection.text,
+      source_label: floatingSelection.source_label,
+      surrounding_text: floatingSelection.surrounding_text,
+    };
+    setPinnedContext(nextContext);
+    setMessages((prev) => [
+      ...prev,
+      {
+        role: "user",
+        content: buildSelectionHistoryMessage(nextContext),
+      },
+    ]);
+    setFloatingSelection(null);
+    setIsOpen(true);
+    setInput((current) => current || "Can you explain this?");
+    window.getSelection()?.removeAllRanges();
+    window.setTimeout(() => inputRef.current?.focus(), 80);
+  };
+
+  const handleSend = async () => {
     if (!input.trim()) return;
 
-    const userMsg: Message = { role: "user", content: input.trim() };
+    const trimmed = input.trim();
+    const userMsg: Message = { role: "user", content: trimmed };
     setMessages((prev) => [...prev, userMsg]);
     setInput("");
+    setIsThinking(true);
 
-    setTimeout(() => {
-      const response = findResponse(userMsg.content, {
+    try {
+      const history = messages.slice(-8).map((message) => ({
+        role: message.role,
+        content: message.content,
+      }));
+      const response = await queryChat(trimmed, history, pinnedContext);
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: "assistant",
+          content: response.answer,
+          source: response.llm_used ? "llm" : "fallback",
+        },
+      ]);
+    } catch {
+      const fallback = buildEmergencyFallback({
         datasetName,
         targetColumn,
         taskType,
         activeStageId,
         stageLogs,
         metrics,
+        pinnedContext,
       });
-      setMessages((prev) => [...prev, { role: "assistant", content: response }]);
-    }, 350);
+      setMessages((prev) => [...prev, { role: "assistant", content: fallback, source: "fallback" }]);
+    } finally {
+      setIsThinking(false);
+    }
   };
 
   return (
     <>
+      <AnimatePresence>
+        {floatingSelection && (
+          <motion.button
+            className="fixed z-50 flex items-center gap-2 rounded-full border border-primary/40 bg-background/95 px-3 py-2 text-xs font-medium text-foreground shadow-[0_12px_30px_rgba(0,0,0,0.35)] backdrop-blur"
+            style={{
+              left: floatingSelection.x,
+              top: floatingSelection.y,
+              transform: "translate(-50%, -100%)",
+            }}
+            initial={{ opacity: 0, y: 8, scale: 0.96 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 8, scale: 0.96 }}
+            onClick={handleUseSelection}
+          >
+            <Sparkles className="h-3.5 w-3.5 text-primary" />
+            Ask dill.pkl about this
+          </motion.button>
+        )}
+      </AnimatePresence>
+
       <motion.button
-        className="glow-purple fixed bottom-6 right-6 z-50 flex h-14 w-14 items-center justify-center rounded-full bg-primary transition-transform hover:scale-110"
+        className="glow-purple fixed bottom-6 left-6 z-50 flex h-14 w-14 items-center justify-center rounded-full bg-primary transition-transform hover:scale-110"
         onClick={() => setIsOpen((current) => !current)}
         whileTap={{ scale: 0.9 }}
       >
@@ -86,17 +212,42 @@ const ChatBot = ({ datasetName, targetColumn, taskType, activeStageId, stageLogs
       <AnimatePresence>
         {isOpen && (
           <motion.div
-            className="glass-card fixed bottom-24 right-6 z-50 flex h-[28rem] w-80 flex-col overflow-hidden rounded-xl border border-border/50 sm:w-96"
+            ref={panelRef}
+            className="glass-card fixed bottom-24 left-6 z-50 flex h-[32rem] w-80 flex-col overflow-hidden rounded-xl border border-border/50 sm:w-[26rem]"
             initial={{ opacity: 0, y: 20, scale: 0.9 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 20, scale: 0.9 }}
             transition={{ type: "spring", damping: 25 }}
+            data-chat-context-label="Chat assistant"
           >
             <div className="flex items-center gap-2 border-b border-border/30 px-4 py-3">
               <Bot className="h-4 w-4 text-accent" />
               <span className="text-sm font-semibold text-foreground">dill.pkl Assistant</span>
               <span className="ml-auto text-[10px] font-mono text-accent">online</span>
             </div>
+
+            {pinnedContext && (
+              <div className="border-b border-border/30 px-3 py-3">
+                <div className="rounded-xl border border-primary/20 bg-primary/8 p-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex items-center gap-2 text-[11px] font-medium uppercase tracking-[0.18em] text-primary">
+                      <Quote className="h-3.5 w-3.5" />
+                      Highlighted Context
+                    </div>
+                    <button
+                      onClick={() => setPinnedContext(null)}
+                      className="rounded-md p-1 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                  <p className="mt-2 text-xs leading-6 text-foreground">{pinnedContext.text}</p>
+                  {pinnedContext.source_label && (
+                    <p className="mt-2 text-[11px] text-muted-foreground">Source: {pinnedContext.source_label}</p>
+                  )}
+                </div>
+              </div>
+            )}
 
             <div ref={scrollRef} className="scrollbar-thin flex-1 space-y-3 overflow-y-auto p-3">
               {messages.map((message, index) => (
@@ -112,11 +263,16 @@ const ChatBot = ({ datasetName, targetColumn, taskType, activeStageId, stageLogs
                     </div>
                   )}
                   <div
-                    className={`max-w-[80%] whitespace-pre-line rounded-xl px-3 py-2 text-[12px] leading-relaxed ${
+                    className={`max-w-[82%] rounded-xl px-3 py-2 text-[12px] leading-relaxed ${
                       message.role === "user" ? "bg-primary/20 text-foreground" : "bg-secondary text-secondary-foreground"
                     }`}
                   >
-                    {message.content}
+                    {renderChatContent(message.content)}
+                    {message.role === "assistant" && message.source && (
+                      <div className="mt-2 text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
+                        {message.source === "llm" ? "LLM response" : "Grounded fallback"}
+                      </div>
+                    )}
                   </div>
                   {message.role === "user" && (
                     <div className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary/20">
@@ -125,19 +281,39 @@ const ChatBot = ({ datasetName, targetColumn, taskType, activeStageId, stageLogs
                   )}
                 </motion.div>
               ))}
+              {isThinking && (
+                <motion.div
+                  initial={{ opacity: 0, y: 5 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="flex justify-start gap-2"
+                >
+                  <div className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-accent/20">
+                    <Bot className="h-3 w-3 text-accent" />
+                  </div>
+                  <div className="rounded-xl bg-secondary px-3 py-2 text-[12px] text-secondary-foreground">
+                    Thinking through your run...
+                  </div>
+                </motion.div>
+              )}
             </div>
 
             <div className="border-t border-border/30 p-3">
+              <div className="mb-2 text-[11px] text-muted-foreground">
+                {pinnedContext
+                  ? "Your next question will include the highlighted snippet as extra context."
+                  : "Highlight text anywhere in the app to bring it into the chat."}
+              </div>
               <div className="flex gap-2">
                 <input
+                  ref={inputRef}
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && handleSend()}
-                  placeholder="Ask about this dataset or stage..."
+                  onKeyDown={(e) => e.key === "Enter" && void handleSend()}
+                  placeholder={pinnedContext ? "Ask about the highlighted text..." : "Ask about this dataset or stage..."}
                   className="flex-1 rounded-lg bg-secondary px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary/50"
                 />
                 <button
-                  onClick={handleSend}
+                  onClick={() => void handleSend()}
                   className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary transition-colors hover:bg-primary/80"
                 >
                   <Send className="h-4 w-4 text-primary-foreground" />
@@ -151,66 +327,189 @@ const ChatBot = ({ datasetName, targetColumn, taskType, activeStageId, stageLogs
   );
 };
 
-const findResponse = (
-  input: string,
-  context: {
-    datasetName: string | null;
-    targetColumn: string | null;
-    taskType: TaskType;
-    activeStageId: string | null;
-    stageLogs: Record<string, string[]>;
-    metrics: MetricsResponse | null;
-  },
-) => {
-  const lower = input.toLowerCase().trim();
+const readHighlightedContext = (panelElement: HTMLDivElement | null): FloatingSelection | null => {
+  const selection = window.getSelection();
+  if (!selection || selection.rangeCount === 0 || selection.isCollapsed) return null;
 
-  if (lower.includes("dataset")) {
-    return context.datasetName
-      ? `The current dataset is ${context.datasetName}.`
-      : "No dataset is loaded yet.";
+  const text = selection.toString().replace(/\s+/g, " ").trim();
+  if (text.length < 3) return null;
+
+  const range = selection.getRangeAt(0);
+  const rect = range.getBoundingClientRect();
+  const commonNode = range.commonAncestorContainer;
+  const commonElement =
+    commonNode.nodeType === Node.ELEMENT_NODE ? (commonNode as Element) : commonNode.parentElement;
+
+  if (!commonElement) return null;
+  if (panelElement?.contains(commonElement)) return null;
+  if (commonElement.closest("input, textarea, button")) return null;
+
+  const sourceLabel = resolveSourceLabel(commonElement);
+  const surroundingText = extractSurroundingText(commonElement, text);
+  const cappedText = text.length > 280 ? `${text.slice(0, 277)}...` : text;
+
+  return {
+    text: cappedText,
+    source_label: sourceLabel,
+    surrounding_text: surroundingText,
+    x: clamp(rect.left + rect.width / 2, 120, window.innerWidth - 120),
+    y: clamp(rect.top - 10, 70, window.innerHeight - 140),
+  };
+};
+
+const resolveSourceLabel = (element: Element) => {
+  const labeledAncestor = element.closest<HTMLElement>("[data-chat-context-label]");
+  if (labeledAncestor?.dataset.chatContextLabel) {
+    return labeledAncestor.dataset.chatContextLabel;
   }
 
-  if (lower.includes("target")) {
-    return context.targetColumn
-      ? `The current target column is ${context.targetColumn}.`
-      : "A target column has not been selected yet.";
-  }
+  const section = element.closest("section, article, div");
+  const heading = section?.querySelector("h1, h2, h3, h4");
+  return heading?.textContent?.trim() || "current view";
+};
 
-  if (lower.includes("task")) {
-    return `The pipeline is configured for a ${context.taskType} task.`;
-  }
+const extractSurroundingText = (element: Element, selectedText: string) => {
+  const container =
+    element.closest<HTMLElement>("[data-chat-context-label]") ||
+    element.closest<HTMLElement>("section, article, div, p, li, td, th");
+  const content = container?.textContent?.replace(/\s+/g, " ").trim();
+  if (!content) return undefined;
 
-  if (lower.includes("stage") || lower.includes("status")) {
-    if (!context.activeStageId) {
-      return "The pipeline is idle right now. Upload a dataset and run the pipeline to see active stage updates.";
-    }
-    const stageLogs = context.stageLogs[context.activeStageId] || [];
-    const latestLog = stageLogs[stageLogs.length - 1];
-    return latestLog
-      ? `The active stage is ${context.activeStageId}. Latest log: ${latestLog}`
-      : `The active stage is ${context.activeStageId}.`;
-  }
+  if (content.length <= 320) return content;
 
-  if (lower.includes("metric") || lower.includes("accuracy") || lower.includes("f1") || lower.includes("r2")) {
-    if (!context.metrics) {
-      return "Metrics are not available yet. They appear after evaluation finishes.";
-    }
-    return context.metrics.performance_summary || "Metrics are available in the results panel.";
-  }
+  const needle = selectedText.slice(0, 40);
+  const index = content.indexOf(needle);
+  if (index === -1) return `${content.slice(0, 317)}...`;
 
-  if (lower.includes("log")) {
-    const activeLogs = context.activeStageId ? context.stageLogs[context.activeStageId] || [] : [];
-    if (activeLogs.length === 0) {
-      return "No logs are available for the active stage yet.";
-    }
-    return `Recent ${context.activeStageId} logs:\n${activeLogs.slice(-3).join("\n")}`;
-  }
+  const start = Math.max(0, index - 120);
+  const end = Math.min(content.length, index + selectedText.length + 120);
+  const prefix = start > 0 ? "..." : "";
+  const suffix = end < content.length ? "..." : "";
+  return `${prefix}${content.slice(start, end)}${suffix}`;
+};
 
-  return [
-    context.datasetName ? `Dataset: ${context.datasetName}` : "No dataset loaded yet.",
-    context.targetColumn ? `Target: ${context.targetColumn}` : "Select a target column to continue.",
-    context.activeStageId ? `Active stage: ${context.activeStageId}` : "The pipeline is waiting to start.",
+const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max);
+
+const buildSelectionHistoryMessage = (context: ChatSelectionContext) =>
+  [
+    context.source_label ? `Highlighted context from ${context.source_label}:` : "Highlighted context:",
+    `"${context.text}"`,
   ].join("\n");
+
+const renderChatContent = (content: string) => {
+  const blocks = content.split(/\n\s*\n/).map((block) => block.trim()).filter(Boolean);
+
+  return (
+    <div className="space-y-3">
+      {blocks.map((block, blockIndex) => {
+        const lines = block.split("\n").map((line) => line.trim()).filter(Boolean);
+        const isBulletList = lines.length > 0 && lines.every((line) => line.startsWith("- "));
+
+        if (isBulletList) {
+          return (
+            <ul key={`block-${blockIndex}`} className="space-y-1.5 pl-4">
+              {lines.map((line, lineIndex) => (
+                <li key={`bullet-${blockIndex}-${lineIndex}`} className="list-disc marker:text-primary">
+                  {renderInlineFormatting(line.slice(2))}
+                </li>
+              ))}
+            </ul>
+          );
+        }
+
+        return (
+          <div key={`block-${blockIndex}`} className="space-y-1.5">
+            {lines.map((line, lineIndex) => {
+              const isSectionLabel =
+                line.endsWith(":") &&
+                !line.startsWith("- ") &&
+                line.length <= 48;
+
+              if (isSectionLabel) {
+                return (
+                  <p
+                    key={`line-${blockIndex}-${lineIndex}`}
+                    className="pt-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-primary"
+                  >
+                    {renderInlineFormatting(line.slice(0, -1))}
+                  </p>
+                );
+              }
+
+              return (
+                <p key={`line-${blockIndex}-${lineIndex}`} className="leading-6">
+                  {renderInlineFormatting(line)}
+                </p>
+              );
+            })}
+          </div>
+        );
+      })}
+    </div>
+  );
+};
+
+const renderInlineFormatting = (text: string) => {
+  const segments = text.split(/(\*\*.*?\*\*|`.*?`)/g).filter(Boolean);
+
+  return segments.map((segment, index) => {
+    if (segment.startsWith("**") && segment.endsWith("**")) {
+      return (
+        <strong key={`${segment}-${index}`} className="font-semibold text-foreground">
+          {segment.slice(2, -2)}
+        </strong>
+      );
+    }
+
+    if (segment.startsWith("`") && segment.endsWith("`")) {
+      return (
+        <code
+          key={`${segment}-${index}`}
+          className="rounded bg-background/60 px-1.5 py-0.5 font-mono text-[11px] text-accent"
+        >
+          {segment.slice(1, -1)}
+        </code>
+      );
+    }
+
+    return <Fragment key={`${segment}-${index}`}>{segment}</Fragment>;
+  });
+};
+
+const buildEmergencyFallback = (context: {
+  datasetName: string | null;
+  targetColumn: string | null;
+  taskType: TaskType;
+  activeStageId: string | null;
+  stageLogs: Record<string, string[]>;
+  metrics: MetricsResponse | null;
+  pinnedContext: ChatSelectionContext | null;
+}) => {
+  const lines = [
+    context.datasetName ? `Dataset: ${context.datasetName}` : "No dataset loaded yet.",
+    context.targetColumn ? `Target: ${context.targetColumn}` : "No target selected yet.",
+    `Task: ${context.taskType}`,
+  ];
+  if (context.activeStageId) {
+    lines.push(`Active stage: ${context.activeStageId}`);
+  }
+  if (context.pinnedContext?.text) {
+    lines.push(`Highlighted text: "${context.pinnedContext.text}"`);
+    if (context.pinnedContext.source_label) {
+      lines.push(`Source area: ${context.pinnedContext.source_label}`);
+    }
+  }
+  if (context.taskType === "regression" && context.metrics?.r2 != null && context.metrics?.rmse != null) {
+    lines.push(
+      `Current regression metrics: R2 = ${context.metrics.r2.toFixed(3)}, RMSE = ${context.metrics.rmse.toFixed(3)}`,
+    );
+  }
+  if (context.taskType === "classification" && context.metrics?.accuracy != null && context.metrics?.f1 != null) {
+    lines.push(
+      `Current classification metrics: Accuracy = ${(context.metrics.accuracy * 100).toFixed(1)}%, F1 = ${(context.metrics.f1 * 100).toFixed(1)}%`,
+    );
+  }
+  return `${lines.join("\n")}\nThe full chat assistant is temporarily unavailable, but the pipeline context is still loaded.`;
 };
 
 export default ChatBot;

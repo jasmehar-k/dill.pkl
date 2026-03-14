@@ -103,6 +103,7 @@ const StageDetailPanel = ({
           />
           <motion.div
             className={`glass-card fixed right-0 top-0 z-50 h-full w-full overflow-y-auto border-l border-border/50 scrollbar-thin ${panelWidthClass}`}
+            data-chat-context-label={isFeatureStage ? "Feature engineering panel" : `${stage.label} panel`}
             initial={{ x: "100%" }}
             animate={{ x: 0 }}
             exit={{ x: "100%" }}
