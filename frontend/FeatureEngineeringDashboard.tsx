@@ -54,8 +54,8 @@ const FeatureEngineeringDashboard = ({
 
   return (
     <TooltipProvider>
-      <div className="space-y-6">
-        <section className="glass-card relative overflow-hidden border-primary/20 p-6">
+      <div className="space-y-6" data-chat-context-label="Feature engineering dashboard">
+        <section className="glass-card relative overflow-hidden border-primary/20 p-6" data-chat-context-label="Feature engineering overview">
           <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(128,90,213,0.18),transparent_35%),radial-gradient(circle_at_bottom_left,rgba(34,197,94,0.16),transparent_30%)]" />
           <div className="relative space-y-4">
             <div className="flex flex-wrap items-start justify-between gap-4">
@@ -107,7 +107,7 @@ const FeatureEngineeringDashboard = ({
           viewModel={viewModel}
         />
 
-        <section className="grid gap-4 lg:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)]">
+        <section className="grid gap-4 lg:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)]" data-chat-context-label="Feature engineering insights">
           <div className="space-y-4">
             <SelectedFeaturesPanel features={readSelectedFeatures(stageResult)} />
             <TopFeaturesSection features={viewModel.topFeatures} />
@@ -244,7 +244,7 @@ const NoteCard = ({
 );
 
 const TopFeaturesSection = ({ features }: { features: FeatureInsightCard[] }) => (
-  <section className="glass-card border-border/60 p-5">
+  <section className="glass-card border-border/60 p-5" data-chat-context-label="Top features">
     <div className="flex items-center justify-between gap-3">
       <div>
         <p className="text-xs font-semibold uppercase tracking-[0.22em] text-muted-foreground">Top Features</p>
@@ -341,7 +341,7 @@ const BeforeAfterPanel = ({ viewModel }: { viewModel: ReturnType<typeof buildFea
 );
 
 const DroppedFeaturesSection = ({ viewModel }: { viewModel: ReturnType<typeof buildFeatureStageViewModel> }) => (
-  <section className="glass-card border-border/60 p-5">
+  <section className="glass-card border-border/60 p-5" data-chat-context-label="Dropped features">
     <div className="flex items-center gap-2">
       <Filter className="h-4 w-4 text-amber-300" />
       <div>

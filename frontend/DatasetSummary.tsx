@@ -29,6 +29,7 @@ const DatasetSummary = ({ summary, columns, targetColumn }: DatasetSummaryProps)
   return (
     <motion.div
       className="glass-card relative z-0 space-y-4 p-4"
+      data-chat-context-label="Dataset summary"
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ delay: 0.3 }}
