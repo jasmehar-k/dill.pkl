@@ -71,7 +71,7 @@ const StageDetailPanel = ({
   const aboutText = useMemo(() => {
     if (!stage) return "";
     if (isPreprocessing) {
-      return "This step prepares your dataset so it can be used by machine learning models. Missing values are filled in, categories are converted into numbers, numeric values are scaled, and the data is split into training and testing sets to evaluate performance.";
+      return "This stage prepares your dataset using deterministic AutoML-style rules. It detects feature types, removes weak or suspicious columns, chooses how to handle missing values, encodes categories carefully, applies scaling or skew-aware transforms when needed, and creates a leakage-safe train/test split so the model can be evaluated fairly.";
     }
     return stage.details;
   }, [isPreprocessing, stage]);
@@ -103,6 +103,7 @@ const StageDetailPanel = ({
           />
           <motion.div
             className={`glass-card fixed right-0 top-0 z-50 h-full w-full overflow-y-auto border-l border-border/50 scrollbar-thin ${panelWidthClass}`}
+            data-chat-context-label={isFeatureStage ? "Feature engineering panel" : `${stage.label} panel`}
             initial={{ x: "100%" }}
             animate={{ x: 0 }}
             exit={{ x: "100%" }}
@@ -144,7 +145,7 @@ const StageDetailPanel = ({
                     <p className="text-sm leading-relaxed text-secondary-foreground">{aboutText}</p>
                   </div>
 
-                  <StageSummaryCard stage={stage} stageResult={stageResult} />
+                  {!isPreprocessing && <StageSummaryCard stage={stage} stageResult={stageResult} />}
 
                   {isResults && (explanationSummary || pipelineSummary || explanationBullets.length > 0) && (
                     <div className="space-y-3">
@@ -422,8 +423,14 @@ const buildHighlights = (
     case "preprocessing":
       return [
         { label: "Training data", value: `${stageResult?.train_size ?? "Pending"} rows` },
-        { label: "Evaluation data", value: `${stageResult?.test_size ?? "Pending"} rows` },
-        { label: "Model features", value: `${stageResult?.feature_count ?? "Pending"} columns used` },
+        {
+          label: "After drops",
+          value: `${stageResult?.feature_count_after_column_drops ?? stageResult?.feature_count ?? "Pending"} columns`,
+        },
+        {
+          label: "Transformed",
+          value: `${stageResult?.transformed_feature_count ?? stageResult?.feature_count ?? "Pending"} columns`,
+        },
       ];
     case "features":
       return [
@@ -855,30 +862,94 @@ const PreprocessExplanation = ({
 }) => {
   const summary =
     (stageResult?.explanation as string | undefined) ||
-    "We filled missing values, simplified categories, and prepared numeric columns so the model can learn reliably.";
+    "We reviewed the dataset and applied deterministic preprocessing rules before modeling.";
+  const missingSummary = (stageResult?.missing_summary as Record<string, unknown> | undefined) || {};
+  const categoricalSummary = (stageResult?.categorical_summary as Record<string, unknown> | undefined) || {};
+  const scalingSummary = (stageResult?.scaling_summary as Record<string, unknown> | undefined) || {};
+  const transformSummary = (stageResult?.transform_summary as Record<string, unknown> | undefined) || {};
+  const droppedColumns = Array.isArray(stageResult?.dropped_columns)
+    ? (stageResult?.dropped_columns as Array<Record<string, unknown>>)
+    : [];
   const train = stageResult?.train_size as number | undefined;
   const test = stageResult?.test_size as number | undefined;
   const total = datasetSummary?.rows;
-  const integrityOK =
-    typeof train === "number" && typeof test === "number" && typeof total === "number" && train + test === total;
+  const droppedRows = Number(missingSummary?.dropped_rows_count ?? 0);
+  const strategyUsed = String(missingSummary?.strategy_used ?? "none");
+  const imputedNumeric = Array.isArray(missingSummary?.imputed_numeric_columns)
+    ? (missingSummary.imputed_numeric_columns as string[])
+    : [];
+  const imputedCategorical = Array.isArray(missingSummary?.imputed_categorical_columns)
+    ? (missingSummary.imputed_categorical_columns as string[])
+    : [];
+  const highCardinality = Array.isArray(categoricalSummary?.high_cardinality_columns)
+    ? (categoricalSummary.high_cardinality_columns as string[])
+    : [];
+  const rareGrouped = Array.isArray(categoricalSummary?.rare_category_grouped_columns)
+    ? (categoricalSummary.rare_category_grouped_columns as string[])
+    : [];
+  const logColumns = Array.isArray(transformSummary?.log_transformed_columns)
+    ? (transformSummary.log_transformed_columns as string[])
+    : [];
+  const scaler = String(scalingSummary?.scaler ?? "None");
+  const splitMatchesModelingRows =
+    typeof train === "number" &&
+    typeof test === "number" &&
+    typeof total === "number" &&
+    train + test <= total;
+
+  const bullets = [
+    droppedColumns.length > 0
+      ? `Dropped ${droppedColumns.length} low-value column${droppedColumns.length === 1 ? "" : "s"}, including ${droppedColumns
+          .slice(0, 3)
+          .map((item) => String(item.column ?? ""))
+          .filter(Boolean)
+          .join(", ")}.`
+      : "No columns needed to be removed as obvious IDs, constants, or leakage risks.",
+    strategyUsed === "none"
+      ? "No missing values were found after cleanup, so no imputation or row dropping was needed."
+      : strategyUsed === "drop_rows"
+        ? `Dropped ${droppedRows.toLocaleString()} row${droppedRows === 1 ? "" : "s"} with missing values because the affected share was small.`
+        : `Missing values were handled with a ${strategyUsed} strategy using train-fitted rules.`,
+    highCardinality.length > 0
+      ? `Used safer encoding for high-cardinality columns like ${highCardinality.slice(0, 3).join(", ")} instead of naive one-hot expansion.`
+      : "Categorical columns were encoded with conservative train-fitted rules.",
+    scaler !== "None"
+      ? `Scaled numeric columns with ${scaler}${logColumns.length > 0 ? ` after log-transforming ${logColumns.slice(0, 3).join(", ")}` : ""}.`
+      : logColumns.length > 0
+        ? `Applied log transforms to ${logColumns.slice(0, 3).join(", ")} without additional scaling.`
+        : "No numeric scaling or skew transform was needed.",
+  ].filter(Boolean);
 
   return (
     <div className="space-y-2">
       <p className="text-foreground">{summary}</p>
       <ul className="ml-4 list-disc space-y-1 text-sm text-secondary-foreground">
-        <li>Any missing values were filled in automatically.</li>
-        <li>Columns with categories were converted into numbers so the model can use them.</li>
-        <li>Numeric features were standardized so large ranges don&apos;t dominate the model.</li>
+        {bullets.map((bullet) => (
+          <li key={bullet}>{bullet}</li>
+        ))}
       </ul>
+      {(imputedNumeric.length > 0 || imputedCategorical.length > 0 || rareGrouped.length > 0) && (
+        <p className="text-sm text-secondary-foreground">
+          {imputedNumeric.length > 0 && `Numeric imputation: ${imputedNumeric.slice(0, 4).join(", ")}.`}{" "}
+          {imputedCategorical.length > 0 && `Categorical imputation: ${imputedCategorical.slice(0, 4).join(", ")}.`}{" "}
+          {rareGrouped.length > 0 && `Rare levels grouped in ${rareGrouped.slice(0, 4).join(", ")}.`}
+        </p>
+      )}
       {(train || test) && (
         <p className="text-sm text-secondary-foreground">
           Finally, the data was split into {train ? train.toLocaleString() : "?"} rows for training and{" "}
           {test ? test.toLocaleString() : "?"} rows to test how well the model performs on new data.
         </p>
       )}
-      {integrityOK && <p className="text-sm font-medium text-primary">✔ Dataset integrity preserved (0 rows dropped)</p>}
+      {splitMatchesModelingRows && (
+        <p className="text-sm font-medium text-primary">
+          {droppedRows > 0
+            ? `${droppedRows.toLocaleString()} row${droppedRows === 1 ? "" : "s"} were removed before the final split.`
+            : "No feature rows had to be removed for missingness before the final split."}
+        </p>
+      )}
       <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
-        {["Raw data", "Clean missing values", "Convert categories", "Prepare numeric columns", "Train/Test split"].map(
+        {["Raw data", "Drop weak columns", "Handle missingness", "Encode categories", "Scale and split"].map(
           (step, index, arr) => (
             <div key={step} className="flex items-center gap-1">
               <span className="rounded bg-secondary px-2 py-1">{step}</span>

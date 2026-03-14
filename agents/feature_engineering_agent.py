@@ -46,7 +46,25 @@ class FeatureEngineeringAgent(BaseAgent):
         try:
             logger.info("Engineering features for dataset with %s columns", len(df.columns))
 
-            df = df.copy()
+            prepared_df = preprocessing.get("_feature_engineering_input_df")
+            if isinstance(prepared_df, pd.DataFrame):
+                df = prepared_df.copy()
+            else:
+                df = df.copy()
+                modeling_indices = preprocessing.get("_modeling_indices", [])
+                if isinstance(modeling_indices, list) and modeling_indices:
+                    available_indices = [index for index in modeling_indices if index in df.index]
+                    if available_indices:
+                        df = df.loc[available_indices].copy()
+
+                kept_feature_columns = preprocessing.get("kept_feature_columns", [])
+                if isinstance(kept_feature_columns, list) and kept_feature_columns:
+                    allowed_columns = [column for column in kept_feature_columns if column in df.columns]
+                    if target_column in df.columns:
+                        df = df[allowed_columns + [target_column]].copy()
+                    else:
+                        df = df[allowed_columns].copy()
+
             preprocessing_numeric = preprocessing.get("numeric_columns", [])
             preprocessing_categorical = preprocessing.get("categorical_columns", [])
 
@@ -71,6 +89,18 @@ class FeatureEngineeringAgent(BaseAgent):
                 applied_transformations.append({
                     "type": "drop_index_like_columns",
                     "columns": sorted(index_like_columns),
+                })
+
+            numeric_columns, categorical_columns = self._get_feature_types(X)
+
+            duplicate_like_columns = self._find_duplicate_like_columns(X, numeric_columns)
+            if duplicate_like_columns:
+                X = X.drop(columns=duplicate_like_columns)
+                dropped_columns.extend(duplicate_like_columns)
+                applied_transformations.append({
+                    "type": "correlation_filter",
+                    "threshold": self.CORRELATION_THRESHOLD,
+                    "columns": duplicate_like_columns,
                 })
 
             numeric_columns, categorical_columns = self._get_feature_types(X)
@@ -317,6 +347,43 @@ class FeatureEngineeringAgent(BaseAgent):
         ranked = [column for column in ranked if float(variances.get(column, 0.0)) > 0.0]
         return ranked[: self.MAX_INTERACTION_NUMERIC_COLUMNS]
 
+    def _find_duplicate_like_columns(self, X: pd.DataFrame, numeric_columns: list[str]) -> list[str]:
+        """Drop obvious copy-like numeric columns when a base feature already exists."""
+        duplicates: list[str] = []
+        numeric_frame = X[numeric_columns].copy() if numeric_columns else pd.DataFrame(index=X.index)
+        if numeric_frame.empty:
+            return duplicates
+
+        for column in numeric_columns:
+            normalized = column.lower()
+            if not any(token in normalized for token in ("copy", "duplicate", "clone")):
+                continue
+
+            base_name = (
+                normalized.replace("_copy", "")
+                .replace("copy_", "")
+                .replace("_duplicate", "")
+                .replace("duplicate_", "")
+                .replace("_clone", "")
+                .replace("clone_", "")
+            )
+            candidates = [
+                other for other in numeric_columns
+                if other != column and other.lower() == base_name
+            ]
+            if not candidates:
+                continue
+
+            candidate = candidates[0]
+            aligned = numeric_frame[[column, candidate]].dropna()
+            if aligned.empty:
+                continue
+            correlation = aligned[column].corr(aligned[candidate])
+            if pd.notna(correlation) and float(abs(correlation)) >= self.CORRELATION_THRESHOLD:
+                duplicates.append(column)
+
+        return sorted(dict.fromkeys(duplicates))
+
     def _generate_interactions(self, X: pd.DataFrame, numeric_columns: list[str]) -> list[str]:
         """Generate deterministic pairwise interactions among selected numeric columns."""
         generated: list[str] = []
@@ -379,6 +446,11 @@ class FeatureEngineeringAgent(BaseAgent):
 
         if left_is_derived != right_is_derived:
             return left if left_is_derived else right
+
+        left_copy_like = any(token in left.lower() for token in ("copy", "duplicate", "clone"))
+        right_copy_like = any(token in right.lower() for token in ("copy", "duplicate", "clone"))
+        if left_copy_like != right_copy_like:
+            return left if left_copy_like else right
 
         left_variance = float(variances.get(left, 0.0))
         right_variance = float(variances.get(right, 0.0))

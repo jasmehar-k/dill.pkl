@@ -131,6 +131,79 @@ class TestPreprocessorAgent:
 
         assert result["train_size"] > 0
         assert result["test_size"] > 0
+        assert "missing_summary" in result
+        assert "categorical_summary" in result
+        assert "scaling_summary" in result
+
+    @pytest.mark.asyncio
+    async def test_preprocessor_applies_automl_style_rules(self) -> None:
+        """Test that preprocessing makes deterministic AutoML-style decisions."""
+        rows = 1400
+        rng = np.random.default_rng(21)
+        rare_values = np.array(["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L"], dtype=object)
+        rare_city = rare_values[rng.integers(0, len(rare_values), size=rows)]
+        rare_city[:24] = np.array([f"rare_{index % 6}" for index in range(24)], dtype=object)
+
+        df = pd.DataFrame({
+            "Unnamed: 0": np.arange(rows),
+            "customer_id": [f"CUST-{100000 + index}" for index in range(rows)],
+            "value": rng.lognormal(mean=2.0, sigma=1.3, size=rows),
+            "extreme": rng.normal(loc=10.0, scale=2.0, size=rows),
+            "category_low": rng.choice(["bronze", "silver", "gold"], size=rows, p=[0.5, 0.3, 0.2]).astype(object),
+            "zip_code": [f"ZIP-{index % 240}" for index in range(rows)],
+            "rare_city": rare_city,
+            "mostly_missing": np.where(np.arange(rows) % 10 == 0, rng.normal(size=rows), np.nan),
+            "event_date": pd.date_range("2024-01-01", periods=rows, freq="D").astype(str),
+        })
+        df.loc[:19, "value"] = np.nan
+        df.loc[:19, "category_low"] = None
+        df.loc[:9, "extreme"] = df.loc[:9, "extreme"] * 40
+        df["target"] = np.where(df["extreme"].fillna(0) > np.nanmedian(df["extreme"]), "yes", "no")
+
+        analysis = {
+            "numeric_columns": ["value", "extreme"],
+            "categorical_columns": ["category_low", "zip_code", "rare_city", "mostly_missing", "event_date"],
+        }
+
+        agent = PreprocessorAgent()
+        result = await agent.execute(df, analysis, "target")
+
+        drop_lookup = {item["column"]: item["reason"] for item in result["dropped_columns"]}
+        assert drop_lookup["Unnamed: 0"] == "identifier"
+        assert drop_lookup["customer_id"] == "identifier"
+        assert drop_lookup["mostly_missing"] == "sparse"
+        assert result["missing_summary"]["strategy_used"] == "mixed"
+        assert result["missing_summary"]["dropped_rows_count"] == 20
+        assert "zip_code" in result["categorical_summary"]["high_cardinality_columns"]
+        assert "rare_city" in result["categorical_summary"]["rare_category_grouped_columns"]
+        assert result["scaling_summary"]["scaler"] == "RobustScaler"
+        assert "value" in result["transform_summary"]["log_transformed_columns"]
+        assert "event_date" in result["datetime_columns"]
+        assert result["target_summary"]["task_type"] == "classification"
+        assert result["transformed_feature_count"] >= result["feature_count_after_column_drops"]
+        assert isinstance(result["_X_train_transformed"], pd.DataFrame)
+        assert result["_X_train_transformed"].isnull().sum().sum() == 0
+
+    @pytest.mark.asyncio
+    async def test_preprocessor_prefers_imputation_on_small_datasets(self) -> None:
+        """Test that small datasets favor imputation over dropping many rows."""
+        df = pd.DataFrame({
+            "num": [1.0, 2.0, np.nan, 4.0, 5.0, np.nan, 7.0, 8.0],
+            "cat": ["a", None, "b", "a", None, "b", "a", "b"],
+            "target": [0, 1, 0, 1, 0, 1, 0, 1],
+        })
+        analysis = {
+            "numeric_columns": ["num"],
+            "categorical_columns": ["cat"],
+        }
+
+        agent = PreprocessorAgent()
+        result = await agent.execute(df, analysis, "target", test_size=0.25, random_state=7)
+
+        assert result["missing_summary"]["strategy_used"] == "impute"
+        assert result["missing_summary"]["dropped_rows_count"] == 0
+        assert result["missing_summary"]["imputed_numeric_columns"] == ["num"]
+        assert result["missing_summary"]["imputed_categorical_columns"] == ["cat"]
 
 
 class TestFeatureEngineeringAgent:
@@ -399,6 +472,53 @@ class TestTrainingAgent:
 
         assert list(result["X_train"].columns) == ["feature1"]
         assert result["selected_features"] == ["feature1"]
+
+    @pytest.mark.asyncio
+    async def test_training_uses_preprocessing_split_artifacts(self) -> None:
+        """Test that training reuses the preprocessing split when available."""
+        df = pd.DataFrame({
+            "feature1": np.linspace(1, 100, 120),
+            "feature2": np.linspace(50, 150, 120),
+            "target": [0, 1] * 60,
+        })
+        analysis = {
+            "numeric_columns": ["feature1", "feature2"],
+            "categorical_columns": [],
+        }
+
+        preprocessor = PreprocessorAgent()
+        preprocessing_result = await preprocessor.execute(df, analysis, "target", test_size=0.25, random_state=11)
+
+        model_selection = {
+            "top_candidates": [
+                {
+                    "priority": 1,
+                    "model_name": "RandomForest",
+                    "model_family": "tree_ensemble",
+                    "reasoning": "Primary recommendation.",
+                    "fixed_params": {"n_estimators": 10, "random_state": 42},
+                    "search_space": {},
+                }
+            ],
+            "task_type": "classification",
+            "target_column": "target",
+        }
+
+        agent = TrainingAgent()
+        result = await agent.execute(
+            df,
+            model_selection,
+            {
+                "test_size": 0.25,
+                "random_state": 11,
+                "preprocessing_result": preprocessing_result,
+            },
+        )
+
+        assert result["X_train"].equals(preprocessing_result["_X_train_transformed"])
+        assert result["X_test"].equals(preprocessing_result["_X_test_transformed"])
+        assert result["X_train"].shape[0] == preprocessing_result["train_size"]
+        assert result["X_test"].shape[0] == preprocessing_result["test_size"]
 
     @pytest.mark.asyncio
     async def test_training_multi_model_uses_top_candidates(self) -> None:

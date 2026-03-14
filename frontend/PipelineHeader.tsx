@@ -36,7 +36,7 @@ const PipelineHeader = ({
   const showMetrics = Boolean(metrics && (metrics.accuracy || metrics.r2 !== null));
 
   return (
-    <div className="glass-card space-y-4 p-5">
+    <div className="glass-card space-y-4 p-5" data-chat-context-label="Pipeline header">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div className="flex items-center gap-3">
           <span className="text-2xl">dill.pkl</span>
