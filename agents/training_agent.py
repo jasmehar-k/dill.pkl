@@ -71,6 +71,7 @@ class TrainingAgent(BaseAgent):
         try:
             test_size = pipeline_config.get("test_size", 0.2)
             random_state = pipeline_config.get("random_state", 42)
+            preprocessing_result = pipeline_config.get("preprocessing_result", {})
 
             # Get target column from model selection
             target_column = model_selection.get("target_column", df.columns[-1])
@@ -78,36 +79,60 @@ class TrainingAgent(BaseAgent):
             selected_features = model_selection.get("selected_features", [])
             engineered_df = model_selection.get("_engineered_df")
 
-            # Prepare data
-            feature_source = (
-                engineered_df.copy()
-                if isinstance(engineered_df, pd.DataFrame)
-                else df.drop(columns=[target_column]).copy()
-            )
-            if selected_features:
-                available_features = [
-                    column for column in selected_features
-                    if column in feature_source.columns
-                ]
-                X = feature_source[available_features].copy()
+            if (
+                not isinstance(engineered_df, pd.DataFrame)
+                and isinstance(preprocessing_result, dict)
+                and isinstance(preprocessing_result.get("_X_train_transformed"), pd.DataFrame)
+                and isinstance(preprocessing_result.get("_X_test_transformed"), pd.DataFrame)
+            ):
+                X_train = preprocessing_result["_X_train_transformed"].copy()
+                X_test = preprocessing_result["_X_test_transformed"].copy()
+                y_train = preprocessing_result.get("_y_train")
+                y_test = preprocessing_result.get("_y_test")
+                if not isinstance(y_train, pd.Series) or not isinstance(y_test, pd.Series):
+                    raise ValueError("Preprocessing split artifacts are incomplete for training")
             else:
-                X = feature_source.copy()
-            y = df[target_column]
+                feature_source = (
+                    engineered_df.copy()
+                    if isinstance(engineered_df, pd.DataFrame)
+                    else df.drop(columns=[target_column]).copy()
+                )
+                if selected_features:
+                    available_features = [
+                        column for column in selected_features
+                        if column in feature_source.columns
+                    ]
+                    X = feature_source[available_features].copy()
+                else:
+                    X = feature_source.copy()
+                y = df[target_column].loc[X.index]
 
-            # Handle categorical columns deterministically.
-            for col in X.columns:
-                if not pd.api.types.is_numeric_dtype(X[col]):
-                    values = X[col].astype(str)
-                    categories = sorted(values.unique().tolist())
-                    X[col] = pd.Categorical(values, categories=categories).codes
+                if X.empty:
+                    raise ValueError("No features available for training after feature selection")
 
-            if X.empty:
+                train_indices = preprocessing_result.get("_train_indices", []) if isinstance(preprocessing_result, dict) else []
+                test_indices = preprocessing_result.get("_test_indices", []) if isinstance(preprocessing_result, dict) else []
+                if isinstance(train_indices, list) and isinstance(test_indices, list) and train_indices and test_indices:
+                    available_train = [index for index in train_indices if index in X.index]
+                    available_test = [index for index in test_indices if index in X.index]
+                    if available_train and available_test:
+                        X_train = X.loc[available_train].copy()
+                        X_test = X.loc[available_test].copy()
+                        y_train = y.loc[available_train].copy()
+                        y_test = y.loc[available_test].copy()
+                    else:
+                        X_train, X_test, y_train, y_test = train_test_split(
+                            X, y, test_size=test_size, random_state=random_state
+                        )
+                else:
+                    X_train, X_test, y_train, y_test = train_test_split(
+                        X, y, test_size=test_size, random_state=random_state
+                    )
+
+                X_train, X_test = self._encode_categorical_train_test(X_train, X_test)
+
+            if X_train.empty:
                 raise ValueError("No features available for training after feature selection")
-
-            # Split data
-            X_train, X_test, y_train, y_test = train_test_split(
-                X, y, test_size=test_size, random_state=random_state
-            )
 
             # Determine if we should do multi-model comparison
             enable_multi_model = pipeline_config.get("enable_multi_model", False)
@@ -147,6 +172,26 @@ class TrainingAgent(BaseAgent):
                 agent_name=self.name,
                 details={"error": str(e)},
             ) from e
+
+    def _encode_categorical_train_test(
+        self,
+        X_train: pd.DataFrame,
+        X_test: pd.DataFrame,
+    ) -> tuple[pd.DataFrame, pd.DataFrame]:
+        """Encode non-numeric columns using training categories only."""
+        train_encoded = X_train.copy()
+        test_encoded = X_test.copy()
+
+        for column in train_encoded.columns:
+            if pd.api.types.is_numeric_dtype(train_encoded[column]):
+                continue
+            train_values = train_encoded[column].astype(str)
+            test_values = test_encoded[column].astype(str)
+            categories = sorted(train_values.unique().tolist())
+            train_encoded[column] = pd.Categorical(train_values, categories=categories).codes
+            test_encoded[column] = pd.Categorical(test_values, categories=categories).codes
+
+        return train_encoded, test_encoded
 
     async def _train_with_comparison(
         self,

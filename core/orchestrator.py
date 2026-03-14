@@ -159,7 +159,11 @@ class Orchestrator:
             # self._logger.info("Stage 5: Training model")
             self.stage_statuses["training"] = "running"
             model_result["target_column"] = target_column
-            training_result = await self.training.run(df, model_result, pipeline_config)
+            training_config = {
+                **pipeline_config,
+                "preprocessing_result": preprocessing_result,
+            }
+            training_result = await self.training.run(df, model_result, training_config)
             self.stage_results["training"] = training_result
             self.stage_statuses["training"] = "completed"
             self.memory.add(Message(role="training", content=str(training_result)))
