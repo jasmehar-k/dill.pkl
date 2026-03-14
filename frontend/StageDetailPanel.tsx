@@ -7,6 +7,7 @@ import { getDatasetPreview } from "@/lib/api";
 import FeatureEngineeringDashboard from "./FeatureEngineeringDashboard";
 import EvaluationDashboard from "./EvaluationDashboard";
 import { StageVisualization } from "./StageVisualizations";
+import TrainingVisualization from "./TrainingVisualization";
 
 interface StageDetailPanelProps {
   stage: PipelineStage | null;
@@ -249,7 +250,34 @@ const StageDetailPanel = ({
                   ) : (
                     <>
                       {!isModelSelection && !isResults && (
-                        <StageLogs stage={stage} stageLogs={stageLogs} stageResult={stageResult} metrics={metrics} />
+                        <>
+                          {stage.id === "training" && (
+                            <TrainingVisualization
+                              modelName={
+                                String(
+                                  stageResult?.model_name ||
+                                    stageResult?.selected_model ||
+                                    metrics?.model_name ||
+                                    ""
+                                )
+                              }
+                              featureCount={
+                                (stageResult?.feature_count as number | undefined) ??
+                                datasetSummary?.column_names.length
+                              }
+                              sampleCount={
+                                (stageResult?.train_size as number | undefined) &&
+                                (stageResult?.test_size as number | undefined)
+                                  ? (stageResult?.train_size as number) + (stageResult?.test_size as number)
+                                  : datasetSummary?.rows
+                              }
+                              targetColumn={targetColumn}
+                              topFeature={getTopFeature(stageResult, datasetSummary)}
+                              taskType={taskType}
+                            />
+                          )}
+                          <StageLogs stage={stage} stageLogs={stageLogs} stageResult={stageResult} metrics={metrics} />
+                        </>
                       )}
                     </>
                   )}
@@ -393,12 +421,14 @@ const StageSummaryCard = ({
 };
 
 const getPanelWidthClass = (stageId: string) => {
-  if (stageId === "features") return "max-w-[min(96vw,1200px)]";
-  if (stageId === "evaluation") return "max-w-[min(96vw,1240px)]";
+  // Give more width overall so large visuals are easier to view
+  if (stageId === "features") return "max-w-[min(98vw,1320px)]";
+  if (stageId === "evaluation") return "max-w-[min(98vw,1320px)]";
   if (stageId === "model_selection" || stageId === "preprocessing") {
-    return "max-w-[min(92vw,960px)]";
+    return "max-w-[min(96vw,1180px)]";
   }
-  return "max-w-lg";
+  // default (including training/results) is wider than before to fit images
+  return "max-w-[min(96vw,1180px)]";
 };
 
 const buildHighlights = (
@@ -760,6 +790,17 @@ const formatDuration = (seconds: number | undefined) => {
 const formatLast = (values?: number[]) => {
   if (!values || values.length === 0) return "Pending";
   return values[values.length - 1].toFixed(3);
+};
+
+const getTopFeature = (stageResult: Record<string, unknown> | null, datasetSummary: DatasetSummary | null) => {
+  const scores = (stageResult?.feature_scores as Record<string, number> | undefined) || {};
+  const sorted = Object.entries(scores).sort((a, b) => b[1] - a[1]);
+  if (sorted.length > 0) return sorted[0][0];
+
+  const selected = (stageResult?.selected_features as string[] | undefined) || [];
+  if (selected.length > 0) return selected[0];
+
+  return datasetSummary?.column_names?.[0] ?? null;
 };
 
 const PreprocessExplanation = ({

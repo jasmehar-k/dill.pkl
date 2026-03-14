@@ -252,3 +252,7 @@ export function queryChat(
 export function getDownloadUrl(kind: "model" | "logs"): string {
   return `${API_BASE_URL}/api/results/download/${kind}`;
 }
+
+export function getVisualizationUrl(filename: string): string {
+  return `${API_BASE_URL}/api/results/visualization/${encodeURIComponent(filename)}`;
+}

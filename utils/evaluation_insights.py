@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, Optional, Dict, List, Tuple
 
 import numpy as np
 
@@ -63,9 +63,9 @@ def build_evaluation_payload(
     training_result: dict[str, Any],
     evaluation_result: dict[str, Any],
     *,
-    target_column: str | None,
-    technical_logs: list[str] | None = None,
-) -> dict[str, Any]:
+    target_column: Optional[str],
+    technical_logs: Optional[List[str]] = None,
+) -> Dict[str, Any]:
     """Build a compact, structured payload for evaluation explanations."""
     task_type = str(evaluation_result.get("task_type") or "classification")
     metrics = {
@@ -127,10 +127,10 @@ def generate_evaluation_insights(
     training_result: dict[str, Any],
     evaluation_result: dict[str, Any],
     *,
-    target_column: str | None,
-    technical_logs: list[str] | None = None,
+    target_column: Optional[str],
+    technical_logs: Optional[List[str]] = None,
     require_openrouter: bool = False,
-) -> dict[str, Any]:
+) -> Dict[str, Any]:
     """Generate structured dashboard copy, optionally requiring OpenRouter."""
     payload = build_evaluation_payload(
         training_result,

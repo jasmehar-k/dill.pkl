@@ -215,6 +215,7 @@ def summarize_stage_result(stage: str, result: Optional[dict[str, Any]]) -> Opti
             "best_epoch",
             "feature_count",
             "training_time",
+            "visualizations",
         ],
         "model_selection": [
             "selected_model",
@@ -255,7 +256,10 @@ def format_evaluation_log(result: dict[str, Any]) -> str:
     return f"Evaluation complete: Accuracy = {result.get('accuracy', 0):.4f}, F1 = {result.get('f1', 0):.4f}"
 
 
-def persist_evaluation_insights(pipeline_id: str | None, insights: dict[str, Any]) -> str | None:
+from typing import Optional, Dict
+
+
+def persist_evaluation_insights(pipeline_id: Optional[str], insights: Dict[str, Any]) -> Optional[str]:
     """Persist the structured evaluation insights as JSON for the current run."""
     if not pipeline_id:
         return None
@@ -407,7 +411,7 @@ async def run_pipeline_stage(stage: str, config: PipelineConfig):
                     *pipeline_state.stage_logs.get("loss", []),
                     *pipeline_state.stage_logs.get("evaluation", []),
                 ],
-                require_openrouter=True,
+                require_openrouter=False,
             )
             result["llm_insights"] = llm_insights
             result["llm_insights_path"] = persist_evaluation_insights(pipeline_state.pipeline_id, llm_insights)
@@ -767,6 +771,20 @@ async def get_metrics():
         "confusion_matrix": evaluation.get("confusion_matrix", []),
         "baseline_metrics": evaluation.get("baseline_metrics"),
     }
+
+
+@app.get("/api/results/visualization/{filename}")
+async def get_visualization(filename: str):
+    """Serve saved training/evaluation visualization images."""
+    safe_name = Path(filename).name
+    file_path = OUTPUTS_DIR / safe_name
+    if not file_path.exists() or file_path.suffix.lower() != ".png":
+        raise HTTPException(status_code=404, detail="Visualization not found")
+    return FileResponse(
+        path=str(file_path),
+        filename=safe_name,
+        media_type="image/png",
+    )
 
 
 @app.get("/api/results/evaluation-insights", response_model=EvaluationInsightsResponse)

@@ -7,6 +7,7 @@ import logging
 from typing import Any
 
 import numpy as np
+from typing import Optional
 from sklearn.metrics import (
     accuracy_score,
     classification_report,
@@ -158,7 +159,7 @@ class EvaluationAgent(BaseAgent):
             "task_type": "regression",
         }
 
-    def _get_classification_confidence(self, model: Any, X_test: Any) -> tuple[np.ndarray | None, list[float]]:
+    def _get_classification_confidence(self, model: Any, X_test: Any) -> tuple[Optional[np.ndarray], list[float]]:
         """Return class scores and per-row confidence estimates when available."""
         if hasattr(model, "predict_proba"):
             probabilities = np.asarray(model.predict_proba(X_test), dtype=float)
@@ -178,7 +179,7 @@ class EvaluationAgent(BaseAgent):
 
         return None, []
 
-    def _compute_roc_auc(self, y_test: np.ndarray, probabilities: np.ndarray | None) -> float | None:
+    def _compute_roc_auc(self, y_test: np.ndarray, probabilities: Optional[np.ndarray]) -> Optional[float]:
         """Compute ROC-AUC when probability-like scores are available."""
         if probabilities is None or len(y_test) == 0:
             return None
