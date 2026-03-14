@@ -61,7 +61,7 @@ class FeatureEngineeringAgent(BaseAgent):
             - feature_engineering_config
         """
         try:
-            logger.info(f"Engineering features for dataset with {len(df.columns)} columns")
+            # logger.info(f"Engineering features for dataset with {len(df.columns)} columns")
 
             df = df.copy()
 
@@ -149,11 +149,11 @@ class FeatureEngineeringAgent(BaseAgent):
                 "categorical_features": [f for f in selected_features if f in categorical_columns],
             }
 
-            logger.info(f"Feature engineering complete: {len(selected_features)} features selected")
+            # logger.info(f"Feature engineering complete: {len(selected_features)} features selected")
             return result
 
         except Exception as e:
-            logger.exception(f"Error in feature engineering: {e}")
+            # logger.exception(f"Error in feature engineering: {e}")
             raise AgentExecutionError(
                 f"Feature engineering failed: {str(e)}",
                 agent_name=self.name,

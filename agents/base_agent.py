@@ -77,24 +77,24 @@ class BaseAgent(ABC):
             AgentExecutionError: If the agent fails to execute.
         """
         dataset_summary = self._find_dataset_summary(args, kwargs)
-        if dataset_summary:
-            self._logger.info(f"Starting {self.name} execution | dataset={dataset_summary}")
-        else:
-            self._logger.info(f"Starting {self.name} execution")
+        # if dataset_summary:
+        #     self._logger.info(f"Starting {self.name} execution | dataset={dataset_summary}")
+        # else:
+        #     self._logger.info(f"Starting {self.name} execution")
 
         input_summary = self._summarize_inputs(args, kwargs)
-        if input_summary:
-            self._logger.info(f"{self.name} inputs: {input_summary}")
+        # if input_summary:
+        #     self._logger.info(f"{self.name} inputs: {input_summary}")
         try:
             result = await self.execute(*args, **kwargs)
             result = self._attach_agent_summary(result, args, kwargs, dataset_summary)
-            self._logger.info(f"{self.name} output: {self._summarize_value(result)}")
-            self._logger.info(f"Completed {self.name} execution")
+            # self._logger.info(f"{self.name} output: {self._summarize_value(result)}")
+            # self._logger.info(f"Completed {self.name} execution")
             return result
         except AgentExecutionError:
             raise
         except Exception as e:
-            self._logger.exception(f"Error in {self.name}: {e}")
+            # self._logger.exception(f"Error in {self.name}: {e}")
             raise AgentExecutionError(
                 f"Agent {self.name} failed: {str(e)}",
                 agent_name=self.name,

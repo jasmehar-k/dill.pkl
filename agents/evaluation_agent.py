@@ -58,7 +58,7 @@ class EvaluationAgent(BaseAgent):
             - performance_summary
         """
         try:
-            logger.info("Evaluating model performance")
+            # logger.info("Evaluating model performance")
 
             model = training_result.get("model")
             X_test = training_result.get("X_test")
@@ -121,11 +121,11 @@ class EvaluationAgent(BaseAgent):
             performance_summary = self._generate_performance_summary(result)
             result["performance_summary"] = performance_summary
 
-            logger.info(f"Evaluation complete: {deployment_decision}")
+            # logger.info(f"Evaluation complete: {deployment_decision}")
             return result
 
         except Exception as e:
-            logger.exception(f"Error in evaluation: {e}")
+            # logger.exception(f"Error in evaluation: {e}")
             raise AgentExecutionError(
                 f"Evaluation failed: {str(e)}",
                 agent_name=self.name,

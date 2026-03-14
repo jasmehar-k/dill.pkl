@@ -54,6 +54,7 @@ class PipelineState:
             "analysis": "waiting",
             "preprocessing": "waiting",
             "features": "waiting",
+            "model_selection": "waiting",
             "training": "waiting",
             "loss": "waiting",
             "evaluation": "waiting",
@@ -185,6 +186,19 @@ def summarize_stage_result(stage: str, result: Optional[dict[str, Any]]) -> Opti
             "val_loss",
             "best_epoch",
         ],
+        "model_selection": [
+            "selected_model",
+            "candidate_models",
+            "reasoning",
+            "hyperparameters",
+            "llm_returned",
+            "llm_summary",
+            "analysis_signals",
+            "class_balance",
+            "n_samples",
+            "n_features",
+            "task_type",
+        ],
         "results": [
             "model_path",
             "metadata_path",
@@ -208,14 +222,14 @@ async def run_pipeline_stage(stage: str, config: PipelineConfig):
     """Run a single pipeline stage and update state."""
     pipeline_state.stage_statuses[stage] = "running"
     add_log(stage, f"Starting {stage} stage...")
-    logger.info(
-        "Starting stage=%s | file=%s | target=%s | task_type=%s | %s",
-        stage,
-        pipeline_state.dataset_filename or "unknown",
-        pipeline_state.target_column or "unset",
-        config.task_type,
-        summarize_dataset(pipeline_state.dataset),
-    )
+    # logger.info(
+    #     "Starting stage=%s | file=%s | target=%s | task_type=%s | %s",
+    #     stage,
+    #     pipeline_state.dataset_filename or "unknown",
+    #     pipeline_state.target_column or "unset",
+    #     config.task_type,
+    #     summarize_dataset(pipeline_state.dataset),
+    # )
 
     try:
         if stage == "analysis":
@@ -260,22 +274,54 @@ async def run_pipeline_stage(stage: str, config: PipelineConfig):
             add_agent_summary_logs("features", result)
             add_log(stage, f"Feature engineering complete: {result.get('final_feature_count', 0)} features")
 
-        elif stage == "training":
+        elif stage == "model_selection":
             from agents.model_selection_agent import ModelSelectionAgent
-            from agents.training_agent import TrainingAgent
 
+            analysis = pipeline_state.stage_results.get("analysis", {})
             features = pipeline_state.stage_results.get("features", {})
             agent = ModelSelectionAgent()
             model_result = await agent.run(
                 pipeline_state.dataset,
                 features,
                 pipeline_state.target_column,
-                config.task_type
+                config.task_type,
+                analysis,
             )
             model_result["target_column"] = pipeline_state.target_column
             pipeline_state.stage_results["model_selection"] = model_result
-            add_agent_summary_logs("training", model_result)
+            add_agent_summary_logs("model_selection", model_result)
+            if model_result.get("llm_returned"):
+                add_log(stage, "Model selection LLM returned a result; using LLM selection.")
+            else:
+                add_log(stage, "Model selection LLM did not return a result; falling back to default selection.")
             add_log(stage, f"Selected model: {model_result.get('selected_model', 'unknown')}")
+
+        elif stage == "training":
+            from agents.training_agent import TrainingAgent
+
+            model_result = pipeline_state.stage_results.get("model_selection")
+            if not model_result:
+                from agents.model_selection_agent import ModelSelectionAgent
+
+                analysis = pipeline_state.stage_results.get("analysis", {})
+                features = pipeline_state.stage_results.get("features", {})
+                agent = ModelSelectionAgent()
+                model_result = await agent.run(
+                    pipeline_state.dataset,
+                    features,
+                    pipeline_state.target_column,
+                    config.task_type,
+                    analysis,
+                )
+                model_result["target_column"] = pipeline_state.target_column
+                pipeline_state.stage_results["model_selection"] = model_result
+                add_agent_summary_logs("model_selection", model_result)
+                if model_result.get("llm_returned"):
+                    add_log("model_selection", "Model selection LLM returned a result; using LLM selection.")
+                else:
+                    add_log("model_selection", "Model selection LLM did not return a result; falling back to default selection.")
+                add_log("model_selection", f"Selected model: {model_result.get('selected_model', 'unknown')}")
+                pipeline_state.stage_statuses["model_selection"] = "completed"
 
             train_agent = TrainingAgent()
             train_result = await train_agent.run(
@@ -336,16 +382,16 @@ async def run_pipeline_stage(stage: str, config: PipelineConfig):
 
         pipeline_state.stage_statuses[stage] = "completed"
         add_log(stage, f"{stage} stage completed successfully")
-        logger.info(
-            "Completed stage=%s | result=%s",
-            stage,
-            json.dumps(summarize_stage_result(stage, pipeline_state.stage_results.get(stage)), default=str, ensure_ascii=True),
-        )
+        # logger.info(
+        #     "Completed stage=%s | result=%s",
+        #     stage,
+        #     json.dumps(summarize_stage_result(stage, pipeline_state.stage_results.get(stage)), default=str, ensure_ascii=True),
+        # )
 
     except Exception as e:
         pipeline_state.stage_statuses[stage] = "failed"
         add_log(stage, f"Error: {str(e)}")
-        logger.exception("Stage failed stage=%s | error=%s", stage, str(e))
+        # logger.exception("Stage failed stage=%s | error=%s", stage, str(e))
         raise
 
 
@@ -400,12 +446,12 @@ async def upload_dataset(file: UploadFile = File(...)):
         pipeline_state.stage_results = {}
         pipeline_state.stage_statuses = {stage: "waiting" for stage in pipeline_state.stage_statuses}
         pipeline_state.stage_logs = {stage: [] for stage in pipeline_state.stage_statuses}
-        logger.info(
-            "Dataset uploaded | file=%s | pipeline_id=%s | %s",
-            file.filename,
-            dataset_id,
-            summarize_dataset(df),
-        )
+        # logger.info(
+        #     "Dataset uploaded | file=%s | pipeline_id=%s | %s",
+        #     file.filename,
+        #     dataset_id,
+        #     summarize_dataset(df),
+        # )
 
         return {
             "dataset_id": dataset_id,
@@ -528,7 +574,7 @@ async def start_pipeline(config: PipelineConfig = PipelineConfig()):
         raise HTTPException(status_code=400, detail="Target column not set")
 
     # Run all stages sequentially
-    stages_order = ["analysis", "preprocessing", "features", "training", "loss", "evaluation", "results"]
+    stages_order = ["analysis", "preprocessing", "features", "model_selection", "training", "loss", "evaluation", "results"]
 
     for stage in stages_order:
         if pipeline_state.stage_statuses.get(stage) == "waiting":

@@ -152,8 +152,13 @@ class PreprocessorAgent(BaseAgent):
                 "llm_used": llm_used,
             }
 
+            # Store processed data in a way that subsequent stages can access
+            # For now, return config and let TrainingAgent handle the actual processing
+            # logger.info(f"Preprocessing complete: {X_train.shape[1]} features, {len(X_train)} train samples")
+            return result
+
         except Exception as e:
-            logger.exception(f"Error preprocessing data: {e}")
+            # logger.exception(f"Error preprocessing data: {e}")
             raise AgentExecutionError(
                 f"Preprocessing failed: {str(e)}",
                 agent_name=self.name,
