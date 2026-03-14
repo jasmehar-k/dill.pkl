@@ -319,9 +319,11 @@ class TestModelSelectionAgent:
         agent = ModelSelectionAgent()
         result = await agent.execute(df, features, "target", "classification")
 
-        assert "selected_model" in result
-        assert "candidate_models" in result
-        assert "hyperparameters" in result
+        assert "top_candidates" in result
+        assert len(result["top_candidates"]) <= 3
+        assert "selection_reasoning" in result
+        assert "fixed_params" in result["top_candidates"][0]
+        assert "search_space" in result["top_candidates"][0]
 
 
 class TestTrainingAgent:
@@ -342,8 +344,16 @@ class TestTrainingAgent:
         })
 
         model_selection = {
-            "selected_model": "RandomForest",
-            "hyperparameters": {"n_estimators": 10, "random_state": 42},
+            "top_candidates": [
+                {
+                    "priority": 1,
+                    "model_name": "RandomForest",
+                    "model_family": "tree_ensemble",
+                    "reasoning": "Primary recommendation.",
+                    "fixed_params": {"n_estimators": 10, "random_state": 42},
+                    "search_space": {},
+                }
+            ],
             "task_type": "classification",
             "target_column": "target",
         }
@@ -368,8 +378,16 @@ class TestTrainingAgent:
         })
 
         model_selection = {
-            "selected_model": "RandomForest",
-            "hyperparameters": {"n_estimators": 10, "random_state": 42},
+            "top_candidates": [
+                {
+                    "priority": 1,
+                    "model_name": "RandomForest",
+                    "model_family": "tree_ensemble",
+                    "reasoning": "Primary recommendation.",
+                    "fixed_params": {"n_estimators": 10, "random_state": 42},
+                    "search_space": {},
+                }
+            ],
             "task_type": "classification",
             "target_column": "target",
             "selected_features": ["feature1"],
@@ -381,6 +399,55 @@ class TestTrainingAgent:
 
         assert list(result["X_train"].columns) == ["feature1"]
         assert result["selected_features"] == ["feature1"]
+
+    @pytest.mark.asyncio
+    async def test_training_multi_model_uses_top_candidates(self) -> None:
+        """Test that multi-model training compares candidates from model selection output."""
+        df = pd.DataFrame({
+            "feature1": [1, 2, 3, 4, 5] * 20,
+            "feature2": [5.0, 4.0, 3.0, 2.0, 1.0] * 20,
+            "target": [0, 1, 0, 1, 0] * 20,
+        })
+
+        model_selection = {
+            "top_candidates": [
+                {
+                    "priority": 1,
+                    "model_name": "RandomForest",
+                    "model_family": "tree_ensemble",
+                    "reasoning": "Primary recommendation.",
+                    "fixed_params": {"n_estimators": 10, "random_state": 42},
+                    "search_space": {},
+                },
+                {
+                    "priority": 2,
+                    "model_name": "LogisticRegression",
+                    "model_family": "linear",
+                    "reasoning": "Fast backup baseline.",
+                    "fixed_params": {"max_iter": 500, "C": 1.0, "random_state": 42},
+                    "search_space": {},
+                },
+            ],
+            "task_type": "classification",
+            "target_column": "target",
+        }
+
+        agent = TrainingAgent()
+        result = await agent.execute(
+            df,
+            model_selection,
+            {
+                "test_size": 0.2,
+                "random_state": 42,
+                "enable_multi_model": True,
+                "optimize_hyperparameters": False,
+                "cv_folds": 3,
+            },
+        )
+
+        assert result["training_mode"] == "multi_model"
+        compared_names = [item["model_name"] for item in result.get("compared_candidates", [])]
+        assert compared_names == ["RandomForest", "LogisticRegression"]
 
 
 class TestEvaluationAgent:

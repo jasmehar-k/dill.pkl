@@ -2,12 +2,15 @@
 
 This agent handles model training including:
 - Cross-validation
-- Hyperparameter tuning
-- Training/validation loss tracking
+- Hyperparameter tuning with Optuna
+- Multi-model comparison
+- Real training/validation loss tracking
+- Ensemble support
 """
 
 import logging
-from typing import Any
+import time
+from typing import Any, Optional
 
 import numpy as np
 import pandas as pd
@@ -32,9 +35,10 @@ class TrainingAgent(BaseAgent):
 
     This agent handles:
     - Model training with cross-validation
-    - Hyperparameter tuning
-    - Overfitting detection
-    - Training progress tracking
+    - Hyperparameter optimization with Optuna
+    - Multi-model comparison
+    - Real training history tracking
+    - Ensemble training
     """
 
     def __init__(self) -> None:
@@ -62,10 +66,9 @@ class TrainingAgent(BaseAgent):
             - train_loss, val_loss
             - best_epoch
             - training_time
+            - model_comparisons (if multi-model enabled)
         """
         try:
-            # logger.info(f"Training {model_selection.get('selected_model', 'model')}")
-
             test_size = pipeline_config.get("test_size", 0.2)
             random_state = pipeline_config.get("random_state", 42)
 
@@ -106,75 +109,479 @@ class TrainingAgent(BaseAgent):
                 X, y, test_size=test_size, random_state=random_state
             )
 
-            # Get model
-            model = self._create_model(
-                model_name=model_selection.get("selected_model", "RandomForest"),
-                hyperparameters=model_selection.get("hyperparameters", {}),
-                task_type=task_type,
-            )
+            # Determine if we should do multi-model comparison
+            enable_multi_model = pipeline_config.get("enable_multi_model", False)
+            top_candidates = self._extract_top_candidates(model_selection)
+            candidate_models = [candidate["model_name"] for candidate in top_candidates]
 
-            # Cross-validation
-            cv_scores = cross_val_score(
-                model,
-                X_train,
-                y_train,
-                cv=min(5, len(X_train) // 10),
-                scoring="accuracy" if task_type == "classification" else "r2",
-            )
-
-            # Measure training time
-            import time
-            start_time = time.perf_counter()
-
-            # Train on full training set
-            model.fit(X_train, y_train)
-            training_time = time.perf_counter() - start_time
-
-            # Calculate training score
-            train_score = model.score(X_train, y_train)
-            test_score = model.score(X_test, y_test)
-
-            # Simulate loss curves
-            n_epochs = 8
-            if task_type == "classification":
-                train_loss = self._simulate_loss_curve(n_epochs, train_score, decreasing=True)
-                val_loss = self._simulate_loss_curve(n_epochs, test_score, decreasing=False)
+            if enable_multi_model and candidate_models and len(candidate_models) > 1:
+                # Multi-model comparison mode
+                return await self._train_with_comparison(
+                    X_train=X_train,
+                    X_test=X_test,
+                    y_train=y_train,
+                    y_test=y_test,
+                    model_selection=model_selection,
+                    top_candidates=top_candidates,
+                    task_type=task_type,
+                    random_state=random_state,
+                    pipeline_config=pipeline_config,
+                )
             else:
-                train_loss = self._simulate_loss_curve(n_epochs, train_score, decreasing=True)
-                val_loss = self._simulate_loss_curve(n_epochs, test_score, decreasing=False)
-
-            best_epoch = self._find_best_epoch(val_loss)
-
-            result = {
-                "model": model,
-                "model_name": model_selection.get("selected_model"),
-                "best_score": float(cv_scores.mean()),
-                "cv_scores": cv_scores.tolist(),
-                "cv_std": float(cv_scores.std()),
-                "train_score": float(train_score),
-                "test_score": float(test_score),
-                "train_loss": train_loss,
-                "val_loss": val_loss,
-                "best_epoch": best_epoch,
-                "feature_count": X.shape[1],
-                "training_time": float(training_time),
-                "X_train": X_train,
-                "X_test": X_test,
-                "y_train": y_train,
-                "y_test": y_test,
-                "selected_features": list(X.columns),
-            }
-
-            # logger.info(f"Training complete: CV score = {cv_scores.mean():.4f}")
-            return result
+                # Single model training mode (original behavior with real training history)
+                return await self._train_single_model(
+                    X_train=X_train,
+                    X_test=X_test,
+                    y_train=y_train,
+                    y_test=y_test,
+                    model_selection=model_selection,
+                    top_candidates=top_candidates,
+                    task_type=task_type,
+                    random_state=random_state,
+                    pipeline_config=pipeline_config,
+                )
 
         except Exception as e:
-            # logger.exception(f"Error in training: {e}")
             raise AgentExecutionError(
                 f"Training failed: {str(e)}",
                 agent_name=self.name,
                 details={"error": str(e)},
             ) from e
+
+    async def _train_with_comparison(
+        self,
+        X_train: pd.DataFrame,
+        X_test: pd.DataFrame,
+        y_train: pd.Series,
+        y_test: pd.Series,
+        model_selection: dict[str, Any],
+        top_candidates: list[dict[str, Any]],
+        task_type: str,
+        random_state: int,
+        pipeline_config: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Train multiple models and compare them."""
+        from core.model_comparator import ModelComparator
+
+        candidate_models = [candidate["model_name"] for candidate in top_candidates]
+        optimize_hpo = pipeline_config.get("optimize_hyperparameters", True)
+        try:
+            from utils.lightgbm_logger import install_lightgbm_warning_counter, reset_lightgbm_warning_counter
+
+            install_lightgbm_warning_counter()
+            reset_lightgbm_warning_counter()
+        except Exception:
+            pass
+
+        comparator = ModelComparator(
+            cv_folds=pipeline_config.get("cv_folds", 5),
+            n_trials_hpo=pipeline_config.get("n_trials_hpo", 10) if optimize_hpo else 0,
+            random_state=random_state,
+        )
+
+        comparison_result = await comparator.compare_models(
+            X_train=X_train,
+            y_train=y_train,
+            candidate_models=candidate_models,
+            candidate_specs=top_candidates,
+            task_type=task_type,
+            optimize_hyperparameters=optimize_hpo,
+        )
+
+        # Get best model and train final model
+        best_model_name = comparison_result["best_model"]
+        best_params = comparison_result["best_params"]
+        selected_candidate = self._find_candidate(top_candidates, best_model_name)
+        compared_candidates = [
+            self._find_candidate(top_candidates, name) or {"model_name": name}
+            for name in candidate_models
+        ]
+
+        # Create and train final model
+        model = self._create_model(best_model_name, best_params, task_type)
+
+        start_time = time.perf_counter()
+        model.fit(X_train, y_train)
+        training_time = time.perf_counter() - start_time
+
+        # Get training history
+        train_loss, val_loss, loss_source = self._get_training_history(
+            model, X_train, y_train, X_test, y_test, task_type
+        )
+
+        # Evaluate
+        train_score = model.score(X_train, y_train)
+        test_score = model.score(X_test, y_test)
+        tree_metrics = self._build_tree_metrics(
+            model=model,
+            X_train=X_train,
+            y_train=y_train,
+            X_test=X_test,
+            y_test=y_test,
+            task_type=task_type,
+        )
+
+        # Check if ensemble should be built
+        enable_ensemble = pipeline_config.get("enable_ensemble", False)
+        ensemble_result = None
+        if enable_ensemble and len(candidate_models) >= 2:
+            from core.ensemble_builder import EnsembleBuilder, should_use_ensemble
+
+            if should_use_ensemble(comparison_result["model_comparisons"]):
+                builder = EnsembleBuilder(random_state=random_state)
+                ensemble_result = builder.build_ensemble_from_results(
+                    model_comparisons=comparison_result["model_comparisons"],
+                    task_type=task_type,
+                    ensemble_type=pipeline_config.get("ensemble_type", "stacking"),
+                    top_k=pipeline_config.get("ensemble_top_k", 3),
+                )
+
+                # Train ensemble
+                ensemble = ensemble_result["ensemble"]
+                ensemble.fit(X_train, y_train)
+
+                # Evaluate ensemble
+                ensemble_eval = builder.evaluate_ensemble(
+                    ensemble, X_train, y_train, task_type, cv=5
+                )
+                ensemble_result["cv_score"] = ensemble_eval["cv_mean"]
+                ensemble_result["cv_std"] = ensemble_eval["cv_std"]
+
+                # If ensemble is better, use it
+                if ensemble_eval["cv_mean"] > comparison_result["best_cv_score"]:
+                    model = ensemble
+                    test_score = model.score(X_test, y_test)
+                    best_model_name = f"Ensemble ({', '.join(ensemble_result['base_models'])})"
+                    best_params = {}
+
+        return {
+            "model": model,
+            "model_name": best_model_name,
+            "best_score": comparison_result["best_cv_score"],
+            "cv_scores": comparison_result["best_model_result"].get("cv_scores", []),
+            "cv_std": comparison_result["best_cv_std"],
+            "train_score": float(train_score),
+            "test_score": float(test_score),
+            "train_loss": train_loss,
+            "val_loss": val_loss,
+            "best_epoch": self._find_best_epoch(val_loss) if val_loss else 0,
+            "loss_source": loss_source,
+            "tree_metrics": tree_metrics,
+            "feature_count": X_train.shape[1],
+            "training_time": float(training_time),
+            "X_train": X_train,
+            "X_test": X_test,
+            "y_train": y_train,
+            "y_test": y_test,
+            "selected_features": list(X_train.columns),
+            "model_comparisons": comparison_result["model_comparisons"],
+            "best_params": best_params,
+            "ensemble_result": ensemble_result,
+            "candidate_plan": top_candidates,
+            "compared_candidates": compared_candidates,
+            "selected_candidate": selected_candidate,
+            "training_mode": "multi_model" if len(candidate_models) > 1 else "single",
+        }
+
+    async def _train_single_model(
+        self,
+        X_train: pd.DataFrame,
+        X_test: pd.DataFrame,
+        y_train: pd.Series,
+        y_test: pd.Series,
+        model_selection: dict[str, Any],
+        top_candidates: list[dict[str, Any]],
+        task_type: str,
+        random_state: int,
+        pipeline_config: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Train a single model with optional hyperparameter optimization."""
+        selected_candidate = top_candidates[0] if top_candidates else {
+            "model_name": "RandomForest",
+            "fixed_params": {},
+            "search_space": {},
+        }
+        model_name = selected_candidate.get("model_name", "RandomForest")
+        hyperparameters = dict(selected_candidate.get("fixed_params") or {})
+        search_space = selected_candidate.get("search_space") if isinstance(selected_candidate.get("search_space"), dict) else None
+        try:
+            from utils.lightgbm_logger import install_lightgbm_warning_counter, reset_lightgbm_warning_counter
+
+            install_lightgbm_warning_counter()
+            reset_lightgbm_warning_counter()
+        except Exception:
+            pass
+
+        # Optionally run HPO
+        optimize_hpo = pipeline_config.get("optimize_hyperparameters", False)
+        if optimize_hpo and pipeline_config.get("n_trials_hpo", 0) > 0:
+            try:
+                from core.hyperparameter_optimizer import HyperparameterOptimizer
+
+                optimizer = HyperparameterOptimizer(
+                    n_trials=pipeline_config.get("n_trials_hpo", 10),
+                    cv=pipeline_config.get("cv_folds", 5),
+                    scoring="accuracy" if task_type == "classification" else "r2",
+                    random_state=random_state,
+                )
+                opt_result = optimizer.optimize(
+                    model_name,
+                    X_train,
+                    y_train,
+                    task_type,
+                    search_space=search_space,
+                    base_params=hyperparameters,
+                )
+                hyperparameters = {**hyperparameters, **opt_result.get("best_params", {})}
+                logger.info(f"Optimized {model_name}: best CV = {opt_result.get('best_score', 0):.4f}")
+            except Exception as e:
+                logger.warning(f"Hyperparameter optimization skipped for {model_name}: {e}")
+
+        # Create model
+        model = self._create_model(model_name, hyperparameters, task_type)
+
+        # Get real training history if available (XGBoost, LightGBM, etc.)
+        train_loss, val_loss, loss_source = self._get_training_history(
+            model, X_train, y_train, X_test, y_test, task_type
+        )
+
+        # Cross-validation
+        cv_folds = pipeline_config.get("cv_folds", 5)
+        cv_scores = cross_val_score(
+            model,
+            X_train,
+            y_train,
+            cv=min(cv_folds, len(X_train) // 10),
+            scoring="accuracy" if task_type == "classification" else "r2",
+        )
+
+        # Train on full training set and time it
+        start_time = time.perf_counter()
+        model.fit(X_train, y_train)
+        training_time = time.perf_counter() - start_time
+
+        # Calculate scores
+        train_score = model.score(X_train, y_train)
+        test_score = model.score(X_test, y_test)
+        tree_metrics = self._build_tree_metrics(
+            model=model,
+            X_train=X_train,
+            y_train=y_train,
+            X_test=X_test,
+            y_test=y_test,
+            task_type=task_type,
+        )
+
+        # If no real training history was captured, generate from CV fold scores
+        if not train_loss or len(train_loss) == 0:
+            n_epochs = 8
+            train_loss = self._simulate_from_cv(n_epochs, train_score, decreasing=True)
+            val_loss = self._simulate_from_cv(n_epochs, cv_scores.mean(), decreasing=False)
+            loss_source = "simulated"
+
+        return {
+            "model": model,
+            "model_name": model_name,
+            "best_score": float(cv_scores.mean()),
+            "cv_scores": cv_scores.tolist(),
+            "cv_std": float(cv_scores.std()),
+            "train_score": float(train_score),
+            "test_score": float(test_score),
+            "train_loss": train_loss,
+            "val_loss": val_loss,
+            "best_epoch": self._find_best_epoch(val_loss) if val_loss else 0,
+            "loss_source": loss_source,
+            "tree_metrics": tree_metrics,
+            "feature_count": X_train.shape[1],
+            "training_time": float(training_time),
+            "X_train": X_train,
+            "X_test": X_test,
+            "y_train": y_train,
+            "y_test": y_test,
+            "selected_features": list(X_train.columns),
+            "hyperparameters": hyperparameters,
+            "candidate_plan": top_candidates,
+            "selected_candidate": {
+                **selected_candidate,
+                "fixed_params": hyperparameters,
+            },
+            "training_mode": "single",
+        }
+
+    def _extract_top_candidates(self, model_selection: dict[str, Any]) -> list[dict[str, Any]]:
+        """Normalize model selection output to prioritized candidate specs."""
+        raw_candidates = model_selection.get("top_candidates")
+        if isinstance(raw_candidates, list) and raw_candidates:
+            normalized: list[dict[str, Any]] = []
+            for index, item in enumerate(raw_candidates[:3]):
+                if not isinstance(item, dict):
+                    continue
+                model_name = str(item.get("model_name") or "").strip()
+                if not model_name:
+                    continue
+                normalized.append(
+                    {
+                        "priority": index + 1,
+                        "model_name": model_name,
+                        "model_family": str(item.get("model_family") or "other"),
+                        "reasoning": str(item.get("reasoning") or ""),
+                        "fixed_params": item.get("fixed_params", {}) if isinstance(item.get("fixed_params"), dict) else {},
+                        "search_space": item.get("search_space", {}) if isinstance(item.get("search_space"), dict) else {},
+                    }
+                )
+            if normalized:
+                return normalized
+
+        fallback_model = str(model_selection.get("selected_model") or "RandomForest")
+        fallback_params = model_selection.get("hyperparameters", {})
+        return [
+            {
+                "priority": 1,
+                "model_name": fallback_model,
+                "model_family": "other",
+                "reasoning": "Fallback candidate generated from legacy selection output.",
+                "fixed_params": fallback_params if isinstance(fallback_params, dict) else {},
+                "search_space": {},
+            }
+        ]
+
+    def _find_candidate(
+        self,
+        candidates: list[dict[str, Any]],
+        model_name: str,
+    ) -> Optional[dict[str, Any]]:
+        """Find candidate spec by model name."""
+        normalized = model_name.lower().replace("-", "").replace("_", "")
+        for candidate in candidates:
+            candidate_name = str(candidate.get("model_name", "")).lower().replace("-", "").replace("_", "")
+            if candidate_name == normalized:
+                return candidate
+        return None
+
+    def _get_training_history(
+        self,
+        model: Any,
+        X_train: pd.DataFrame,
+        y_train: pd.Series,
+        X_test: pd.DataFrame,
+        y_test: pd.Series,
+        task_type: str,
+    ) -> tuple[list[float], list[float], str]:
+        """Get training history if available from the model.
+
+        Supports:
+        - XGBoost (evals_result)
+        - LightGBM (evals_result_)
+        - GradientBoosting (staged_predict) as a proxy
+
+        Returns:
+            Tuple of (train_loss, val_loss, loss_source).
+        """
+        model_name = model.__class__.__name__.lower()
+
+        # Try XGBoost
+        if hasattr(model, "evals_result"):
+            try:
+                evals = model.evals_result()
+                if evals:
+                    train_key = "train"
+                    val_key = "validation" if "validation" in evals else list(evals.keys())[-1]
+
+                    if train_key in evals and val_key in evals:
+                        # Get the metric name
+                        metric_train = list(evals[train_key].keys())[0] if evals[train_key] else None
+                        metric_val = list(evals[val_key].keys())[0] if evals[val_key] else None
+
+                        if metric_train and metric_val:
+                            train_loss = [float(v) for v in evals[train_key][metric_train]]
+                            val_loss = [float(v) for v in evals[val_key][metric_val]]
+                            return train_loss, val_loss, "real"
+            except Exception:
+                pass
+
+        # Try LightGBM
+        if hasattr(model, "evals_result_"):
+            try:
+                evals = model.evals_result_
+                if evals:
+                    train_key = "training"
+                    val_key = "valid_0" if "valid_0" in evals else list(evals.keys())[-1]
+
+                    if train_key in evals and val_key in evals:
+                        train_loss = [float(v) for v in evals[train_key]]
+                        val_loss = [float(v) for v in evals[val_key]]
+                        return train_loss, val_loss, "real"
+            except Exception:
+                pass
+
+        # Try sklearn GradientBoosting (staged_predict)
+        if "gradientboosting" in model_name:
+            try:
+                train_losses = []
+                val_losses = []
+
+                # Get staged predictions for loss curve
+                from sklearn.metrics import log_loss, mean_squared_error
+
+                for i, (train_pred, val_pred) in enumerate(
+                    zip(
+                        model.staged_predict(X_train),
+                        model.staged_predict(X_test)
+                    )
+                ):
+                    if i >= 10:  # Limit iterations
+                        break
+                    if task_type == "classification":
+                        train_losses.append(float(log_loss(y_train, train_pred)))
+                        val_losses.append(float(log_loss(y_test, val_pred)))
+                    else:
+                        train_losses.append(float(mean_squared_error(y_train, train_pred)))
+                        val_losses.append(float(mean_squared_error(y_test, val_pred)))
+
+                if train_losses and val_losses:
+                    # Normalize to 0-1 range for visualization
+                    train_losses = self._normalize_losses(train_losses)
+                    val_losses = self._normalize_losses(val_losses)
+                    return train_losses, val_losses, "proxy"
+            except Exception:
+                pass
+
+        return [], [], "unavailable"
+
+    def _normalize_losses(self, losses: list[float]) -> list[float]:
+        """Normalize loss values to 0-1 range for visualization."""
+        if not losses:
+            return losses
+
+        min_loss = min(losses)
+        max_loss = max(losses)
+
+        if max_loss == min_loss:
+            return [0.5] * len(losses)
+
+        return [(loss - min_loss) / (max_loss - min_loss) for loss in losses]
+
+    def _simulate_from_cv(
+        self,
+        n_epochs: int,
+        cv_score: float,
+        decreasing: bool = True,
+    ) -> list[float]:
+        """Generate simulated loss curve from CV score as fallback."""
+        if decreasing:
+            start = 1.0 - (cv_score * 0.5)
+            end = 1.0 - cv_score
+        else:
+            start = 0.9 - (cv_score * 0.3)
+            end = 1.0 - cv_score
+
+        curve = []
+        for i in range(n_epochs):
+            progress = i / (n_epochs - 1) if n_epochs > 1 else 0
+            value = start + (end - start) * progress + np.random.normal(0, 0.02)
+            curve.append(max(0.01, min(1.0, value)))
+
+        return curve
 
     def _create_model(
         self,
@@ -202,12 +609,22 @@ class TrainingAgent(BaseAgent):
                     return xgb.XGBClassifier(**hyperparameters)
                 else:
                     return xgb.XGBRegressor(**hyperparameters)
-            except ImportError:
-                # logger.warning("XGBoost not available, falling back to RandomForest")
+            except (ImportError, ModuleNotFoundError) as e:
+                raise RuntimeError(
+                    "XGBoost is not available. Install xgboost and the OpenMP runtime (libomp) to use this model."
+                ) from e
+        elif "lightgbm" in model_name:
+            try:
+                import lightgbm as lgb
+                params = dict(hyperparameters)
                 if task_type == "classification":
-                    return RandomForestClassifier(**hyperparameters)
+                    return lgb.LGBMClassifier(**params)
                 else:
-                    return RandomForestRegressor(**hyperparameters)
+                    return lgb.LGBMRegressor(**params)
+            except (ImportError, ModuleNotFoundError) as e:
+                raise RuntimeError(
+                    "LightGBM is not available. Install lightgbm to use this model."
+                ) from e
         elif "logistic" in model_name:
             return LogisticRegression(**hyperparameters)
         elif "ridge" in model_name:
@@ -224,19 +641,53 @@ class TrainingAgent(BaseAgent):
             else:
                 return RandomForestRegressor(**hyperparameters)
 
+    def _get_default_hyperparameters(
+        self,
+        model_name: str,
+        n_samples: int,
+        task_type: str,
+    ) -> dict[str, Any]:
+        """Get default hyperparameters for a model.
+
+        Delegates to ModelSelectionAgent to keep defaults consistent.
+        """
+        try:
+            from agents.model_selection_agent import ModelSelectionAgent
+
+            selector = ModelSelectionAgent()
+            return selector._get_default_hyperparameters(model_name, n_samples, task_type)
+        except Exception:
+            # Fallback to a minimal safe default
+            if "randomforest" in model_name.lower():
+                return {"n_estimators": 100, "random_state": 42}
+            return {}
+
+    def _is_model_available(self, model_name: str) -> bool:
+        """Check whether optional model dependencies are available."""
+        name = model_name.lower()
+        if "xgboost" in name:
+            try:
+                import xgboost  # type: ignore  # noqa: F401
+            except Exception:
+                return False
+        if "lightgbm" in name:
+            try:
+                import lightgbm  # type: ignore  # noqa: F401
+            except Exception:
+                return False
+        return True
+
     def _simulate_loss_curve(
         self,
         n_epochs: int,
         final_score: float,
         decreasing: bool = True,
     ) -> list[float]:
-        """Simulate a loss curve for visualization."""
+        """Simulate a loss curve for visualization (fallback)."""
         if decreasing:
-            # Start high, decrease to final score
             start = 1.0 - (final_score * 0.5)
             end = 1.0 - final_score
         else:
-            # Start lower, end at final score with some gap
             start = 0.9 - (final_score * 0.3)
             end = 1.0 - final_score
 
@@ -251,3 +702,76 @@ class TrainingAgent(BaseAgent):
     def _find_best_epoch(self, val_loss: list[float]) -> int:
         """Find the epoch with lowest validation loss."""
         return int(np.argmin(val_loss))
+
+    def _build_tree_metrics(
+        self,
+        model: Any,
+        X_train: pd.DataFrame,
+        y_train: pd.Series,
+        X_test: pd.DataFrame,
+        y_test: pd.Series,
+        task_type: str,
+    ) -> Optional[dict[str, Any]]:
+        """Return tree-specific training metrics for the evaluation panel."""
+        model_name = model.__class__.__name__.lower()
+        is_tree_model = any(
+            key in model_name for key in ["randomforest", "gradientboosting", "xgb", "lightgbm"]
+        )
+        if not is_tree_model:
+            return None
+
+        num_trees = None
+        if hasattr(model, "n_estimators"):
+            try:
+                num_trees = int(model.n_estimators)
+            except Exception:
+                num_trees = None
+        if num_trees is None and hasattr(model, "estimators_"):
+            try:
+                num_trees = len(model.estimators_)
+            except Exception:
+                num_trees = None
+
+        train_scores: list[float] = []
+        val_scores: list[float] = []
+        source = "single"
+
+        if "gradientboosting" in model_name and hasattr(model, "staged_predict"):
+            try:
+                from sklearn.metrics import accuracy_score, r2_score
+
+                source = "staged"
+                max_points = 20
+                for index, (train_pred, val_pred) in enumerate(
+                    zip(model.staged_predict(X_train), model.staged_predict(X_test))
+                ):
+                    if index >= max_points:
+                        break
+                    if task_type == "classification":
+                        train_scores.append(float(accuracy_score(y_train, train_pred)))
+                        val_scores.append(float(accuracy_score(y_test, val_pred)))
+                    else:
+                        train_scores.append(float(r2_score(y_train, train_pred)))
+                        val_scores.append(float(r2_score(y_test, val_pred)))
+            except Exception:
+                train_scores = []
+                val_scores = []
+
+        if not train_scores or not val_scores:
+            try:
+                train_scores = [float(model.score(X_train, y_train))]
+                val_scores = [float(model.score(X_test, y_test))]
+            except Exception:
+                train_scores = []
+                val_scores = []
+
+        score_name = "Accuracy" if task_type == "classification" else "R2"
+
+        return {
+            "model_family": model.__class__.__name__,
+            "num_trees": num_trees,
+            "train_scores": train_scores,
+            "val_scores": val_scores,
+            "score_name": score_name,
+            "source": source,
+        }

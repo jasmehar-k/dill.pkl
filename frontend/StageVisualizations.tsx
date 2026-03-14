@@ -247,10 +247,11 @@ const ModelSelectionViz = ({ stageResult }: { stageResult: Record<string, unknow
     return <EmptyState message="Model selection details will appear after the selection stage completes." />;
   }
 
-  const selectedModel = String(stageResult.selected_model ?? "Pending");
-  const candidates = (stageResult.candidate_models as string[] | undefined) || [];
+  const topCandidates = ((stageResult.top_candidates as Array<Record<string, unknown>> | undefined) || []).slice(0, 3);
+  const selectedModel = String(topCandidates[0]?.model_name ?? "Pending");
+  const candidates = topCandidates.map((candidate) => String(candidate.model_name ?? "")).filter(Boolean);
   const llmReturned = stageResult.llm_returned as boolean | undefined;
-  const reasoning = String(stageResult.reasoning ?? "");
+  const reasoning = String(stageResult.selection_reasoning ?? "");
 
   return (
     <div className="space-y-3 text-xs">
@@ -265,7 +266,7 @@ const ModelSelectionViz = ({ stageResult }: { stageResult: Record<string, unknow
       </div>
       {candidates.length > 0 ? (
         <div className="flex flex-wrap gap-2">
-          {candidates.slice(0, 6).map((candidate) => (
+          {candidates.map((candidate) => (
             <span
               key={candidate}
               className="rounded-md bg-secondary px-2 py-1 font-mono text-[10px] text-muted-foreground"

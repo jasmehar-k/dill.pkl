@@ -17,6 +17,7 @@ from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
+from config import settings
 from utils.logger import get_logger
 from utils.evaluation_insights import generate_evaluation_insights
 
@@ -215,12 +216,13 @@ def summarize_stage_result(stage: str, result: Optional[dict[str, Any]]) -> Opti
             "best_epoch",
             "feature_count",
             "training_time",
+            "model_comparisons",
+            "training_mode",
+            "ensemble_result",
         ],
         "model_selection": [
-            "selected_model",
-            "candidate_models",
-            "reasoning",
-            "hyperparameters",
+            "top_candidates",
+            "selection_reasoning",
             "llm_returned",
             "llm_summary",
             "analysis_signals",
@@ -342,7 +344,9 @@ async def run_pipeline_stage(stage: str, config: PipelineConfig):
                 add_log(stage, "Model selection LLM returned a result; using LLM selection.")
             else:
                 add_log(stage, "Model selection LLM did not return a result; falling back to default selection.")
-            add_log(stage, f"Selected model: {model_result.get('selected_model', 'unknown')}")
+            top_candidates = model_result.get("top_candidates", [])
+            candidate_names = [item.get("model_name", "unknown") for item in top_candidates if isinstance(item, dict)]
+            add_log(stage, f"Candidate set: {', '.join(candidate_names) if candidate_names else 'unknown'}")
 
         elif stage == "training":
             from agents.training_agent import TrainingAgent
@@ -368,25 +372,78 @@ async def run_pipeline_stage(stage: str, config: PipelineConfig):
                     add_log("model_selection", "Model selection LLM returned a result; using LLM selection.")
                 else:
                     add_log("model_selection", "Model selection LLM did not return a result; falling back to default selection.")
-                add_log("model_selection", f"Selected model: {model_result.get('selected_model', 'unknown')}")
+                top_candidates = model_result.get("top_candidates", [])
+                candidate_names = [item.get("model_name", "unknown") for item in top_candidates if isinstance(item, dict)]
+                add_log("model_selection", f"Candidate set: {', '.join(candidate_names) if candidate_names else 'unknown'}")
                 pipeline_state.stage_statuses["model_selection"] = "completed"
 
             train_agent = TrainingAgent()
+            training_config = config.model_dump()
+            training_config.update(
+                {
+                    "cv_folds": settings.default_cv_folds,
+                    "enable_multi_model": settings.enable_multi_model,
+                    "optimize_hyperparameters": settings.enable_hpo,
+                    "n_trials_hpo": settings.n_hpo_trials,
+                    "enable_ensemble": settings.enable_ensemble,
+                    "ensemble_type": settings.ensemble_type,
+                    "ensemble_top_k": settings.ensemble_top_k,
+                }
+            )
             train_result = await train_agent.run(
                 pipeline_state.dataset,
                 model_result,
-                config.model_dump(),
+                training_config,
             )
             pipeline_state.stage_results["training"] = train_result
             add_agent_summary_logs("training", train_result)
             add_log(stage, f"Training complete: {train_result.get('best_score', 0):.4f}")
+            try:
+                from utils.lightgbm_logger import get_lightgbm_warning_count
+
+                suppressed = get_lightgbm_warning_count()
+                if suppressed > 0:
+                    add_log(
+                        stage,
+                        f'LightGBM: suppressed {suppressed} "no further splits with positive gain" warnings.',
+                    )
+            except Exception:
+                pass
+            if train_result.get("training_mode") == "multi_model":
+                comparisons = train_result.get("model_comparisons", [])
+                best_name = train_result.get("model_name", "unknown")
+                best_score = train_result.get("best_score", 0)
+                add_log(
+                    stage,
+                    f"Trained {len(comparisons)} candidate models; best = {best_name} (CV={best_score:.4f})",
+                )
 
         elif stage == "loss":
             training = pipeline_state.stage_results.get("training", {})
+            loss_source = training.get("loss_source")
+            tree_metrics = training.get("tree_metrics")
+            if loss_source != "real" and not tree_metrics:
+                pipeline_state.stage_results["loss"] = {
+                    "train_loss": [],
+                    "val_loss": [],
+                    "best_epoch": None,
+                    "loss_source": loss_source,
+                    "tree_metrics": tree_metrics,
+                }
+                add_log(
+                    stage,
+                    "Loss curves are only shown for real training histories; "
+                    f"current source: {loss_source or 'unavailable'}.",
+                )
+                pipeline_state.stage_statuses[stage] = "completed"
+                add_log(stage, f"{stage} stage completed successfully")
+                return
             pipeline_state.stage_results["loss"] = {
                 "train_loss": training.get("train_loss", [0.9, 0.6, 0.4, 0.3, 0.2]),
                 "val_loss": training.get("val_loss", [0.95, 0.7, 0.5, 0.4, 0.35]),
                 "best_epoch": training.get("best_epoch", 3),
+                "loss_source": loss_source,
+                "tree_metrics": tree_metrics,
             }
             add_log(stage, f"Loss analysis complete. Best epoch: {training.get('best_epoch', 3)}")
 

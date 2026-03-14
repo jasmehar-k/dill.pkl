@@ -100,8 +100,23 @@ const EvaluationDashboard = ({
   const residualHistogram = useMemo(() => buildResidualHistogram(stageResult), [stageResult]);
   const confidenceHistogram = useMemo(() => buildConfidenceHistogram(stageResult), [stageResult]);
   const classMetricBars = useMemo(() => buildClassMetricBars(stageResult), [stageResult]);
-  const lossCurveData = useMemo(() => buildLossCurveData(lossStageResult), [lossStageResult]);
-  const lossSummary = useMemo(() => buildLossSummary(lossStageResult), [lossStageResult]);
+  const lossSource = lossStageResult?.loss_source as string | undefined;
+  const treeMetrics = lossStageResult?.tree_metrics as
+    | { num_trees?: number | null; train_scores?: number[]; val_scores?: number[]; score_name?: string }
+    | undefined;
+  const showTreeMetrics = Boolean(treeMetrics);
+  const showLoss = !showTreeMetrics && lossSource === "real";
+  const lossCurveData = useMemo(
+    () => (showLoss ? buildLossCurveData(lossStageResult) : []),
+    [lossStageResult, showLoss],
+  );
+  const lossSummary = useMemo(
+    () =>
+      showLoss
+        ? buildLossSummary(lossStageResult)
+        : { bestEpoch: "N/A", finalTrainLoss: "N/A", finalValLoss: "N/A" },
+    [lossStageResult, showLoss],
+  );
   const modelName = metrics?.model_name ?? "Current model";
   const subtitle = getEvaluationSubtitle(resolvedTaskType);
 
@@ -213,43 +228,97 @@ const EvaluationDashboard = ({
           <p className="mt-4 text-sm leading-7 text-secondary-foreground">{displayInsights.performance_story}</p>
         </section>
 
-        <section className="glass-card border-border/60 p-5">
-          <SectionHeading
-            title="Training Behavior / Loss Review"
-            icon={LineChart}
-            description="The old Loss step is folded in here so you can judge whether training stayed stable or started to drift."
-          />
-          <div className="mt-4 grid gap-3 sm:grid-cols-3">
-            <StatTile label="Best epoch" value={lossSummary.bestEpoch} />
-            <StatTile label="Final train loss" value={lossSummary.finalTrainLoss} />
-            <StatTile label="Final val loss" value={lossSummary.finalValLoss} />
-          </div>
-          <div className="mt-4 h-64">
-            {lossCurveData.length > 0 ? (
-              <ResponsiveContainer width="100%" height="100%">
-                <RechartsLineChart data={lossCurveData}>
-                  <CartesianGrid stroke="rgba(148,163,184,0.16)" vertical={false} />
-                  <XAxis dataKey="epoch" tick={{ fill: "rgba(203,213,225,0.72)", fontSize: 11 }} axisLine={false} tickLine={false} />
-                  <YAxis tick={{ fill: "rgba(203,213,225,0.72)", fontSize: 11 }} axisLine={false} tickLine={false} />
-                  <RechartsTooltip
-                    contentStyle={{
-                      background: "rgba(15,23,42,0.96)",
-                      border: "1px solid rgba(148,163,184,0.24)",
-                      borderRadius: 14,
-                    }}
-                    formatter={(value: number, name: string) => [Number(value).toFixed(3), name]}
-                  />
-                  <Legend wrapperStyle={{ fontSize: 11 }} />
-                  <Line type="monotone" dataKey="trainLoss" name="Train loss" stroke="rgba(129,140,248,0.95)" strokeWidth={2.5} dot={false} />
-                  <Line type="monotone" dataKey="valLoss" name="Validation loss" stroke="rgba(16,185,129,0.95)" strokeWidth={2.5} strokeDasharray="5 5" dot={false} />
-                </RechartsLineChart>
-              </ResponsiveContainer>
-            ) : (
-              <EmptyChart message="Loss curves will appear here when the training stage reports them." />
-            )}
-          </div>
-          <p className="mt-4 text-sm leading-7 text-secondary-foreground">{displayInsights.loss_explanation}</p>
-        </section>
+        {showTreeMetrics ? (
+          <section className="glass-card border-border/60 p-5">
+            <SectionHeading
+              title="Tree Training Progression"
+              icon={LineChart}
+              description="Tree models grow ensembles instead of epochs, so we track score progression as trees are added."
+            />
+            <div className="mt-4 grid gap-3 sm:grid-cols-3">
+              <StatTile label="Number of trees" value={String(treeMetrics?.num_trees ?? "Pending")} />
+              <StatTile label="Final train score" value={formatMetricValue(treeMetrics?.train_scores?.slice(-1)[0], false)} />
+              <StatTile label="Final validation score" value={formatMetricValue(treeMetrics?.val_scores?.slice(-1)[0], false)} />
+            </div>
+            <div className="mt-4 h-64">
+              {(treeMetrics?.train_scores?.length ?? 0) > 0 ? (
+                <ResponsiveContainer width="100%" height="100%">
+                  <RechartsLineChart
+                    data={(treeMetrics?.train_scores || []).map((value, index) => ({
+                      step: `Step ${index + 1}`,
+                      trainScore: value,
+                      valScore: treeMetrics?.val_scores?.[index],
+                    }))}
+                  >
+                    <CartesianGrid stroke="rgba(148,163,184,0.16)" vertical={false} />
+                    <XAxis dataKey="step" tick={{ fill: "rgba(203,213,225,0.72)", fontSize: 11 }} axisLine={false} tickLine={false} />
+                    <YAxis tick={{ fill: "rgba(203,213,225,0.72)", fontSize: 11 }} axisLine={false} tickLine={false} />
+                    <RechartsTooltip
+                      contentStyle={{
+                        background: "rgba(15,23,42,0.96)",
+                        border: "1px solid rgba(148,163,184,0.24)",
+                        borderRadius: 14,
+                      }}
+                      formatter={(value: number, name: string) => [Number(value).toFixed(3), name]}
+                    />
+                    <Legend wrapperStyle={{ fontSize: 11 }} />
+                    <Line type="monotone" dataKey="trainScore" name="Train score" stroke="rgba(129,140,248,0.95)" strokeWidth={2.5} dot={false} />
+                    <Line type="monotone" dataKey="valScore" name="Validation score" stroke="rgba(16,185,129,0.95)" strokeWidth={2.5} strokeDasharray="5 5" dot={false} />
+                  </RechartsLineChart>
+                </ResponsiveContainer>
+              ) : (
+                <EmptyChart message="Score progression will appear here when the model reports it." />
+              )}
+            </div>
+            <p className="mt-4 text-sm leading-7 text-secondary-foreground">
+              Scores show how accuracy (or R2) changes as more trees are added.
+            </p>
+          </section>
+        ) : (
+          <section className="glass-card border-border/60 p-5">
+            <SectionHeading
+              title="Training Behavior / Loss Review"
+              icon={LineChart}
+              description="The old Loss step is folded in here so you can judge whether training stayed stable or started to drift."
+            />
+            <div className="mt-4 grid gap-3 sm:grid-cols-3">
+              <StatTile label="Best epoch" value={lossSummary.bestEpoch} />
+              <StatTile label="Final train loss" value={lossSummary.finalTrainLoss} />
+              <StatTile label="Final val loss" value={lossSummary.finalValLoss} />
+            </div>
+            <div className="mt-4 h-64">
+              {lossCurveData.length > 0 ? (
+                <ResponsiveContainer width="100%" height="100%">
+                  <RechartsLineChart data={lossCurveData}>
+                    <CartesianGrid stroke="rgba(148,163,184,0.16)" vertical={false} />
+                    <XAxis dataKey="epoch" tick={{ fill: "rgba(203,213,225,0.72)", fontSize: 11 }} axisLine={false} tickLine={false} />
+                    <YAxis tick={{ fill: "rgba(203,213,225,0.72)", fontSize: 11 }} axisLine={false} tickLine={false} />
+                    <RechartsTooltip
+                      contentStyle={{
+                        background: "rgba(15,23,42,0.96)",
+                        border: "1px solid rgba(148,163,184,0.24)",
+                        borderRadius: 14,
+                      }}
+                      formatter={(value: number, name: string) => [Number(value).toFixed(3), name]}
+                    />
+                    <Legend wrapperStyle={{ fontSize: 11 }} />
+                    <Line type="monotone" dataKey="trainLoss" name="Train loss" stroke="rgba(129,140,248,0.95)" strokeWidth={2.5} dot={false} />
+                    <Line type="monotone" dataKey="valLoss" name="Validation loss" stroke="rgba(16,185,129,0.95)" strokeWidth={2.5} strokeDasharray="5 5" dot={false} />
+                  </RechartsLineChart>
+                </ResponsiveContainer>
+              ) : (
+                <EmptyChart
+                  message={
+                    showLoss
+                      ? "Loss curves will appear here when the training stage reports them."
+                      : "Loss curves are only shown when the model reports real training history."
+                  }
+                />
+              )}
+            </div>
+            <p className="mt-4 text-sm leading-7 text-secondary-foreground">{displayInsights.loss_explanation}</p>
+          </section>
+        )}
 
         <section className="space-y-3">
           <SectionHeading
