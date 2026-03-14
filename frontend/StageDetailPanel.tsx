@@ -581,6 +581,21 @@ const formatComparisonParams = (params: Record<string, unknown> | undefined) => 
   return entries.map(([key, value]) => `${key}=${String(value)}`).join(", ");
 };
 
+const formatParamValue = (value: unknown) => {
+  if (typeof value === "number") {
+    if (Number.isInteger(value)) return String(value);
+    return value.toFixed(4).replace(/0+$/, "").replace(/\.$/, "");
+  }
+  if (typeof value === "boolean") return value ? "true" : "false";
+  if (value === null || value === undefined) return "null";
+  return String(value);
+};
+
+const formatFamilyLabel = (modelFamily: unknown) => {
+  if (typeof modelFamily !== "string" || !modelFamily.trim()) return "other";
+  return modelFamily.split("_").join(" ");
+};
+
 const describeDatasetSize = (nSamples: number) => {
   if (nSamples >= 50000) return "Large";
   if (nSamples >= 5000) return "Medium";
@@ -791,35 +806,135 @@ const buildModelSelectionPanel = (stageResult: Record<string, unknown> | null) =
 const buildTrainingComparisonPanel = (stageResult: Record<string, unknown> | null) => {
   if (!stageResult) return null;
 
-  const comparisons = getModelComparisons(stageResult);
+  const comparisons = getModelComparisons(stageResult)
+    .slice()
+    .sort((a, b) => {
+      const scoreA = typeof a.cv_mean === "number" ? a.cv_mean : Number.NEGATIVE_INFINITY;
+      const scoreB = typeof b.cv_mean === "number" ? b.cv_mean : Number.NEGATIVE_INFINITY;
+      return scoreB - scoreA;
+    });
   const trainingMode = String(stageResult.training_mode || "");
   const hasComparisons = comparisons.length > 0;
+  const bestModelName = String(stageResult.model_name || comparisons[0]?.model_name || "Pending");
+  const bestCv = typeof comparisons[0]?.cv_mean === "number" ? comparisons[0].cv_mean : null;
+  const rawWorstCv = comparisons.length > 0 ? comparisons[comparisons.length - 1]?.cv_mean : null;
+  const worstCv = typeof rawWorstCv === "number" ? rawWorstCv : bestCv;
+  const scoreSpan = bestCv !== null && worstCv !== null ? Math.max(bestCv - worstCv, 1e-6) : 1;
 
   if (!hasComparisons && trainingMode !== "multi_model") {
     return null;
   }
 
   return (
-    <div className="space-y-3">
-      <h3 className="text-sm font-medium text-accent">Model comparison</h3>
-      <div className="glass-card space-y-2 p-4 text-[11px] text-secondary-foreground">
+    <div className="space-y-4">
+      <h3 className="text-sm font-medium text-accent">Model training experiments</h3>
+
+      <div className="grid gap-2 md:grid-cols-3">
+        <div className="glass-card space-y-1 p-3">
+          <p className="text-[10px] text-muted-foreground">Compared models</p>
+          <p className="font-mono text-sm text-foreground">{hasComparisons ? comparisons.length : "Pending"}</p>
+        </div>
+        <div className="glass-card space-y-1 p-3">
+          <p className="text-[10px] text-muted-foreground">Best CV score</p>
+          <p className="font-mono text-sm text-foreground">{bestCv !== null ? bestCv.toFixed(4) : "Pending"}</p>
+        </div>
+        <div className="glass-card space-y-1 p-3">
+          <p className="text-[10px] text-muted-foreground">Selected model</p>
+          <p className="truncate font-mono text-sm text-foreground">{bestModelName}</p>
+        </div>
+      </div>
+
+      <div className="glass-card space-y-3 p-4 text-[11px] text-secondary-foreground">
         {hasComparisons ? (
-          <div className="space-y-2">
+          <div className="space-y-3">
             {comparisons.map((item, index) => {
               const modelName = String(item.model_name || "Model");
+              const family = formatFamilyLabel(item.model_family);
               const cvMean = typeof item.cv_mean === "number" ? item.cv_mean : null;
               const cvStd = typeof item.cv_std === "number" ? item.cv_std : null;
+              const cvTime = typeof item.cv_time === "number" ? item.cv_time : null;
+              const foldScores = Array.isArray(item.cv_scores)
+                ? item.cv_scores.filter((value): value is number => typeof value === "number")
+                : [];
               const params = item.hyperparameters as Record<string, unknown> | undefined;
+              const paramEntries = Object.entries(params || {})
+                .sort(([left], [right]) => left.localeCompare(right))
+                .slice(0, 8);
+              const reasoning = typeof item.reasoning === "string" ? item.reasoning.trim() : "";
+              const scoreWidth =
+                cvMean !== null && bestCv !== null
+                  ? Math.max(((cvMean - (worstCv ?? cvMean)) / scoreSpan) * 100, 8)
+                  : 8;
+              const isWinner = modelName === bestModelName;
+
               return (
-                <div key={`${modelName}-${index}`} className="rounded-lg bg-secondary/50 px-3 py-2">
+                <div
+                  key={`${modelName}-${index}`}
+                  className={`rounded-lg border p-3 ${
+                    isWinner ? "border-accent/60 bg-accent/10" : "border-border/60 bg-secondary/40"
+                  }`}
+                >
                   <div className="flex flex-wrap items-center justify-between gap-2">
-                    <span className="font-mono text-[11px] text-foreground">{modelName}</span>
-                    <span className="text-[10px] text-muted-foreground">
-                      CV {cvMean !== null ? cvMean.toFixed(3) : "n/a"} ± {cvStd !== null ? cvStd.toFixed(3) : "n/a"}
-                    </span>
+                    <div className="flex min-w-0 items-center gap-2">
+                      <span className="rounded-md bg-secondary px-2 py-1 text-[10px] text-muted-foreground">#{index + 1}</span>
+                      <span className="truncate font-mono text-[11px] text-foreground">{modelName}</span>
+                      <span className="rounded-md bg-secondary px-2 py-1 text-[10px] text-muted-foreground">{family}</span>
+                      {isWinner && <span className="rounded-md bg-accent/20 px-2 py-1 text-[10px] text-accent">selected</span>}
+                    </div>
+                    <div className="text-right">
+                      <p className="font-mono text-[11px] text-foreground">
+                        {cvMean !== null ? cvMean.toFixed(4) : "n/a"}
+                        <span className="text-muted-foreground"> ± {cvStd !== null ? cvStd.toFixed(4) : "n/a"}</span>
+                      </p>
+                      <p className="text-[10px] text-muted-foreground">CV mean ± std</p>
+                    </div>
                   </div>
-                  <div className="mt-1 text-[10px] text-muted-foreground">
-                    Params: {formatComparisonParams(params)}
+
+                  <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-secondary">
+                    <div
+                      className="h-full rounded-full"
+                      style={{
+                        width: `${scoreWidth}%`,
+                        background: "linear-gradient(90deg, hsl(265 80% 60%), hsl(145 70% 50%))",
+                      }}
+                    />
+                  </div>
+
+                  <div className="mt-2 grid gap-2 md:grid-cols-2">
+                    <div className="space-y-1">
+                      <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Fold scores</p>
+                      {foldScores.length > 0 ? (
+                        <div className="flex flex-wrap gap-1">
+                          {foldScores.map((score, scoreIndex) => (
+                            <span key={`${modelName}-fold-${scoreIndex}`} className="rounded bg-secondary px-2 py-1 font-mono text-[10px] text-foreground/90">
+                              F{scoreIndex + 1}: {score.toFixed(3)}
+                            </span>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="text-[10px] text-muted-foreground">Fold-level scores unavailable.</p>
+                      )}
+                    </div>
+
+                    <div className="space-y-1">
+                      <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Hyperparameters</p>
+                      {paramEntries.length > 0 ? (
+                        <div className="flex flex-wrap gap-1">
+                          {paramEntries.map(([key, value]) => (
+                            <span key={`${modelName}-${key}`} className="rounded bg-secondary px-2 py-1 font-mono text-[10px] text-foreground/90">
+                              {key}={formatParamValue(value)}
+                            </span>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="text-[10px] text-muted-foreground">{formatComparisonParams(params)}</p>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-[10px] text-muted-foreground">
+                    <span>Training time: {cvTime !== null ? `${cvTime.toFixed(2)}s` : "n/a"}</span>
+                    {reasoning && <span className="truncate">{reasoning}</span>}
                   </div>
                 </div>
               );
@@ -827,7 +942,7 @@ const buildTrainingComparisonPanel = (stageResult: Record<string, unknown> | nul
           </div>
         ) : (
           <p className="text-xs text-muted-foreground">
-            Multi-model comparison is enabled, but results are not available yet.
+            Multi-model comparison is enabled, but experiment results are not available yet.
           </p>
         )}
       </div>
