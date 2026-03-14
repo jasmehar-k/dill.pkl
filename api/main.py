@@ -153,38 +153,40 @@ class EvaluationInsightsResponse(BaseModel):
 # Helper functions
 def add_log(stage: str, message: str):
     """Add a log message to a stage."""
-    if stage in pipeline_state.stage_logs:
-        pipeline_state.stage_logs[stage].append(message)
+    # if stage in pipeline_state.stage_logs:
+    #     pipeline_state.stage_logs[stage].append(message)
+    pass
 
 
 def add_agent_summary_logs(stage: str, result: Optional[dict[str, Any]]):
     """Add LLM or fallback agent summaries to the stage log stream."""
-    if not result:
-        return
-
-    summary = result.get("_agent_summary")
-    if not isinstance(summary, dict):
-        return
-
-    agent_name = str(summary.get("agent", stage))
-    step_summary = str(summary.get("step_summary", "")).strip()
-    overall_summary = str(summary.get("overall_summary", "")).strip()
-    why = str(summary.get("why", "")).strip()
-    decisions = summary.get("decisions_made", [])
-    llm_used = bool(summary.get("llm_used", False))
-
-    source_tag = "LLM" if llm_used else "Fallback"
-    if step_summary:
-        add_log(stage, f"{agent_name} [{source_tag}] summary: {step_summary}")
-    if isinstance(decisions, list):
-        for decision in decisions[:3]:
-            decision_text = str(decision).strip()
-            if decision_text:
-                add_log(stage, f"{agent_name} decision: {decision_text}")
-    if why:
-        add_log(stage, f"{agent_name} why: {why}")
-    if overall_summary:
-        add_log(stage, f"{agent_name} overall: {overall_summary}")
+    # if not result:
+    #     return
+    #
+    # summary = result.get("_agent_summary")
+    # if not isinstance(summary, dict):
+    #     return
+    #
+    # agent_name = str(summary.get("agent", stage))
+    # step_summary = str(summary.get("step_summary", "")).strip()
+    # overall_summary = str(summary.get("overall_summary", "")).strip()
+    # why = str(summary.get("why", "")).strip()
+    # decisions = summary.get("decisions_made", [])
+    # llm_used = bool(summary.get("llm_used", False))
+    #
+    # source_tag = "LLM" if llm_used else "Fallback"
+    # if step_summary:
+    #     add_log(stage, f"{agent_name} [{source_tag}] summary: {step_summary}")
+    # if isinstance(decisions, list):
+    #     for decision in decisions[:3]:
+    #         decision_text = str(decision).strip()
+    #         if decision_text:
+    #             add_log(stage, f"{agent_name} decision: {decision_text}")
+    # if why:
+    #     add_log(stage, f"{agent_name} why: {why}")
+    # if overall_summary:
+    #     add_log(stage, f"{agent_name} overall: {overall_summary}")
+    return
 
 
 def summarize_dataset(df: Optional[pd.DataFrame]) -> str:
@@ -403,11 +405,14 @@ def build_chat_fallback_answer(
         if preprocessing:
             train_size = preprocessing.get("train_size")
             test_size = preprocessing.get("test_size")
-            numeric = preprocessing.get("numeric_columns", []) or []
-            categorical = preprocessing.get("categorical_columns", []) or []
+            explanation = str(preprocessing.get("explanation") or "").strip()
+            dropped = preprocessing.get("dropped_columns", []) or []
+            transformed = preprocessing.get("transformed_feature_count")
+            if explanation:
+                return explanation
             return (
                 f"Preprocessing cleaned the data before modeling. It split the dataset into {train_size} training rows and {test_size} test rows, "
-                f"and prepared columns like {', '.join((numeric + categorical)[:6])} so the model could learn reliably."
+                f"dropped {len(dropped)} weak column(s), and produced {transformed} transformed feature(s) for modeling."
             )
         return (
             "Preprocessing is the stage where the dataset gets cleaned and prepared for modeling, "
@@ -541,14 +546,14 @@ async def run_pipeline_stage(stage: str, config: PipelineConfig):
     """Run a single pipeline stage and update state."""
     pipeline_state.stage_statuses[stage] = "running"
     add_log(stage, f"Starting {stage} stage...")
-    # logger.info(
-    #     "Starting stage=%s | file=%s | target=%s | task_type=%s | %s",
-    #     stage,
-    #     pipeline_state.dataset_filename or "unknown",
-    #     pipeline_state.target_column or "unset",
-    #     config.task_type,
-    #     summarize_dataset(pipeline_state.dataset),
-    # )
+    logger.info(
+        "Starting stage=%s | file=%s | target=%s | task_type=%s | %s",
+        stage,
+        pipeline_state.dataset_filename or "unknown",
+        pipeline_state.target_column or "unset",
+        config.task_type,
+        summarize_dataset(pipeline_state.dataset),
+    )
 
     try:
         if stage == "analysis":
@@ -657,6 +662,7 @@ async def run_pipeline_stage(stage: str, config: PipelineConfig):
                     "enable_ensemble": settings.enable_ensemble,
                     "ensemble_type": settings.ensemble_type,
                     "ensemble_top_k": settings.ensemble_top_k,
+                    "preprocessing_result": pipeline_state.stage_results.get("preprocessing", {}),
                 }
             )
             train_result = await train_agent.run(
@@ -778,16 +784,16 @@ async def run_pipeline_stage(stage: str, config: PipelineConfig):
 
         pipeline_state.stage_statuses[stage] = "completed"
         add_log(stage, f"{stage} stage completed successfully")
-        # logger.info(
-        #     "Completed stage=%s | result=%s",
-        #     stage,
-        #     json.dumps(summarize_stage_result(stage, pipeline_state.stage_results.get(stage)), default=str, ensure_ascii=True),
-        # )
+        logger.info(
+            "Completed stage=%s | result=%s",
+            stage,
+            json.dumps(summarize_stage_result(stage, pipeline_state.stage_results.get(stage)), default=str, ensure_ascii=True),
+        )
 
     except Exception as e:
         pipeline_state.stage_statuses[stage] = "failed"
         add_log(stage, f"Error: {str(e)}")
-        # logger.exception("Stage failed stage=%s | error=%s", stage, str(e))
+        logger.exception("Stage failed stage=%s | error=%s", stage, str(e))
         raise
 
 
@@ -842,12 +848,12 @@ async def upload_dataset(file: UploadFile = File(...)):
         pipeline_state.stage_results = {}
         pipeline_state.stage_statuses = {stage: "waiting" for stage in pipeline_state.stage_statuses}
         pipeline_state.stage_logs = {stage: [] for stage in pipeline_state.stage_statuses}
-        # logger.info(
-        #     "Dataset uploaded | file=%s | pipeline_id=%s | %s",
-        #     file.filename,
-        #     dataset_id,
-        #     summarize_dataset(df),
-        # )
+        logger.info(
+            "Dataset uploaded | file=%s | pipeline_id=%s | %s",
+            file.filename,
+            dataset_id,
+            summarize_dataset(df),
+        )
 
         return {
             "dataset_id": dataset_id,
