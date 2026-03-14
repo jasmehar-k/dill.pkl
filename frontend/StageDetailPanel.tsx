@@ -2,10 +2,15 @@ import { useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { X } from "lucide-react";
 import type { PipelineStage } from "@/data/pipelineStages";
-import type { DatasetSummary, MetricsResponse, TaskType } from "@/lib/api";
+import type {
+  DatasetPreviewResponse,
+  DatasetSummary,
+  MetricsResponse,
+  TaskType,
+} from "@/lib/api";
 import { getDatasetPreview } from "@/lib/api";
-import { StageVisualization } from "./StageVisualizations";
 import FeatureEngineeringDashboard from "./FeatureEngineeringDashboard";
+import { StageVisualization } from "./StageVisualizations";
 
 interface StageDetailPanelProps {
   stage: PipelineStage | null;
@@ -28,12 +33,14 @@ const StageDetailPanel = ({
   targetColumn,
   onClose,
 }: StageDetailPanelProps) => {
-  const [datasetPreview, setDatasetPreview] = useState<{ rows: Array<Record<string, unknown>>; columns: string[] } | null>(null);
+  const [datasetPreview, setDatasetPreview] = useState<DatasetPreviewResponse | null>(null);
   const [isLoadingPreview, setIsLoadingPreview] = useState(false);
-  const highlights = stage ? buildHighlights(stage.id, stageResult, datasetSummary, metrics) : [];
-  const panelWidthClass = stage?.id === "features" ? "max-w-[min(96vw,1200px)]" : "max-w-lg";
-  const modelPanel = stage?.id === "model_selection" ? buildModelSelectionPanel(stageResult) : null;
+
+  const isFeatureStage = stage?.id === "features";
   const isPreprocessing = stage?.id === "preprocessing";
+  const isModelSelection = stage?.id === "model_selection";
+  const highlights = stage ? buildHighlights(stage.id, stageResult, datasetSummary, metrics) : [];
+  const panelWidthClass = getPanelWidthClass(stage?.id ?? "");
   const aboutText = useMemo(() => {
     if (!stage) return "";
     if (isPreprocessing) {
@@ -43,7 +50,12 @@ const StageDetailPanel = ({
   }, [isPreprocessing, stage]);
 
   useEffect(() => {
-    if (!isPreprocessing || !stage) return;
+    if (!isPreprocessing || !stage) {
+      setDatasetPreview(null);
+      setIsLoadingPreview(false);
+      return;
+    }
+
     setIsLoadingPreview(true);
     void getDatasetPreview(5)
       .then(setDatasetPreview)
@@ -79,7 +91,7 @@ const StageDetailPanel = ({
                 </button>
               </div>
 
-              {stage.id === "features" ? (
+              {isFeatureStage ? (
                 <FeatureEngineeringDashboard
                   stage={stage}
                   stageResult={stageResult}
@@ -90,9 +102,11 @@ const StageDetailPanel = ({
                 />
               ) : (
                 <>
+                  <StageHeader stage={stage} />
+
                   <div className="space-y-2">
                     <h3 className="text-sm font-medium text-accent">About this stage</h3>
-                    <p className="text-sm leading-relaxed text-secondary-foreground">{stage.details}</p>
+                    <p className="text-sm leading-relaxed text-secondary-foreground">{aboutText}</p>
                   </div>
 
                   {highlights.length > 0 && (
@@ -109,48 +123,67 @@ const StageDetailPanel = ({
                     </div>
                   )}
 
-                  <div className="space-y-2">
-                    <h3 className="text-sm font-medium text-accent">Visualization</h3>
-                    <div className="glass-card p-4">
-                      <StageVisualization
-                        stage={stage}
-                        stageResult={stageResult}
-                        datasetSummary={datasetSummary}
-                        metrics={metrics}
-                      />
-                    </div>
-                  </div>
+                  {isModelSelection && buildModelSelectionPanel(stageResult)}
 
-                  <div className="space-y-2">
-                    <h3 className="text-sm font-medium text-accent">Stage logs</h3>
-                    <div className="glass-card max-h-48 space-y-2 overflow-y-auto p-4 font-mono text-[11px] scrollbar-thin">
-                      {stageLogs.length > 0 ? (
-                        stageLogs.map((log, index) => (
-                          <p
-                            key={`${stage.id}-${index}`}
-                            className={`whitespace-pre-wrap leading-relaxed ${
-                              log.includes(" summary:")
-                                ? "text-accent"
-                                : log.includes(" overall:")
-                                  ? "text-primary"
-                                  : "text-foreground/75"
-                            }`}
-                          >
-                            {log}
-                          </p>
-                        ))
-                      ) : (
-                        <p className="text-muted-foreground">No logs recorded for this stage yet.</p>
+                  {isPreprocessing ? (
+                    <>
+                      <div className="space-y-2">
+                        <h3 className="text-sm font-medium text-accent">Dataset overview</h3>
+                        <div className="glass-card p-4">
+                          <StageVisualization
+                            stage={stage}
+                            stageResult={stageResult}
+                            datasetSummary={datasetSummary}
+                            metrics={metrics}
+                          />
+                        </div>
+                      </div>
+
+                      <div className="space-y-2">
+                        <h3 className="text-sm font-medium text-accent">How we prepared your data</h3>
+                        <div className="glass-card space-y-2 p-4 text-sm leading-relaxed text-secondary-foreground">
+                          <PreprocessExplanation stageResult={stageResult} datasetSummary={datasetSummary} />
+                        </div>
+                      </div>
+
+                      <div className="space-y-2">
+                        <h3 className="text-sm font-medium text-accent">Dataset preview</h3>
+                        <DatasetPreviewCard
+                          datasetPreview={datasetPreview}
+                          isLoadingPreview={isLoadingPreview}
+                        />
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      {!isModelSelection && (
+                        <div className="space-y-2">
+                          <h3 className="text-sm font-medium text-accent">Visualization</h3>
+                          <div className="glass-card p-4">
+                            <StageVisualization
+                              stage={stage}
+                              stageResult={stageResult}
+                              datasetSummary={datasetSummary}
+                              metrics={metrics}
+                            />
+                          </div>
+                        </div>
                       )}
-                    </div>
-                  </div>
 
-                  <div className="space-y-2">
-                    <h3 className="text-sm font-medium text-accent">Code</h3>
-                    <pre className="glass-card overflow-x-auto whitespace-pre-wrap p-4 font-mono text-[12px] leading-relaxed text-foreground/80">
-                      {stage.codeSnippet}
-                    </pre>
-                  </div>
+                      {!isModelSelection && (
+                        <>
+                          <StageLogs stage={stage} stageLogs={stageLogs} />
+
+                          <div className="space-y-2">
+                            <h3 className="text-sm font-medium text-accent">Code</h3>
+                            <pre className="glass-card overflow-x-auto whitespace-pre-wrap p-4 font-mono text-[12px] leading-relaxed text-foreground/80">
+                              {stage.codeSnippet}
+                            </pre>
+                          </div>
+                        </>
+                      )}
+                    </>
+                  )}
                 </>
               )}
             </div>
@@ -159,6 +192,94 @@ const StageDetailPanel = ({
       )}
     </AnimatePresence>
   );
+};
+
+const StageHeader = ({ stage }: { stage: PipelineStage }) => (
+  <div className="flex items-start gap-3">
+    <span className="text-3xl">{stage.icon}</span>
+    <div className="space-y-1">
+      <h2 className="text-xl font-semibold text-foreground">{stage.label}</h2>
+      <p className="text-sm text-muted-foreground">{stage.description}</p>
+    </div>
+  </div>
+);
+
+const DatasetPreviewCard = ({
+  datasetPreview,
+  isLoadingPreview,
+}: {
+  datasetPreview: DatasetPreviewResponse | null;
+  isLoadingPreview: boolean;
+}) => (
+  <div className="glass-card overflow-auto p-3">
+    {isLoadingPreview && <p className="text-sm text-muted-foreground">Loading sample rows...</p>}
+    {!isLoadingPreview && datasetPreview && datasetPreview.rows.length > 0 ? (
+      <table className="min-w-full text-left text-[11px]">
+        <thead className="text-muted-foreground">
+          <tr>
+            {datasetPreview.columns.map((column) => (
+              <th key={column} className="px-2 py-1 font-medium">
+                {column}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {datasetPreview.rows.map((row, rowIndex) => (
+            <tr key={rowIndex} className="border-b border-border/50">
+              {datasetPreview.columns.map((column) => (
+                <td key={column} className="px-2 py-1">
+                  {String(row[column] ?? "")}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    ) : (
+      !isLoadingPreview && <p className="text-sm text-muted-foreground">Preview not available.</p>
+    )}
+  </div>
+);
+
+const StageLogs = ({
+  stage,
+  stageLogs,
+}: {
+  stage: PipelineStage;
+  stageLogs: string[];
+}) => (
+  <div className="space-y-2">
+    <h3 className="text-sm font-medium text-accent">Stage logs</h3>
+    <div className="glass-card max-h-48 space-y-2 overflow-y-auto p-4 font-mono text-[11px] scrollbar-thin">
+      {stageLogs.length > 0 ? (
+        stageLogs.map((log, index) => (
+          <p
+            key={`${stage.id}-${index}`}
+            className={`whitespace-pre-wrap leading-relaxed ${
+              log.includes(" summary:")
+                ? "text-accent"
+                : log.includes(" overall:")
+                  ? "text-primary"
+                  : "text-foreground/75"
+            }`}
+          >
+            {log}
+          </p>
+        ))
+      ) : (
+        <p className="text-muted-foreground">No logs recorded for this stage yet.</p>
+      )}
+    </div>
+  </div>
+);
+
+const getPanelWidthClass = (stageId: string) => {
+  if (stageId === "features") return "max-w-[min(96vw,1200px)]";
+  if (stageId === "model_selection" || stageId === "preprocessing") {
+    return "max-w-[min(92vw,960px)]";
+  }
+  return "max-w-lg";
 };
 
 const buildHighlights = (
@@ -188,7 +309,9 @@ const buildHighlights = (
         { label: "Selected", value: String(stageResult?.final_feature_count ?? "Pending") },
         {
           label: "Scored features",
-          value: String(Object.keys((stageResult?.feature_scores as Record<string, number> | undefined) || {}).length || 0),
+          value: String(
+            Object.keys((stageResult?.feature_scores as Record<string, number> | undefined) || {}).length || 0,
+          ),
         },
         {
           label: "PCA",
@@ -196,9 +319,7 @@ const buildHighlights = (
         },
       ];
     case "model_selection":
-      return [
-        { label: "Selected model", value: String(stageResult?.selected_model ?? "Pending") },
-      ];
+      return [{ label: "Selected model", value: String(stageResult?.selected_model ?? "Pending") }];
     case "training":
       return [
         { label: "Model", value: String(stageResult?.model_name ?? metrics?.model_name ?? "Pending") },
@@ -325,9 +446,11 @@ const buildComplexity = (nSamples: number, modelName: string) => {
   const lower = modelName.toLowerCase();
   const heavyModels = ["xgboost", "gradient", "svm", "svr"];
   const base = heavyModels.some((key) => lower.includes(key)) ? "High" : "Medium";
-  if (nSamples < 5000) return { complexity: "Low", time: "1–3 seconds", memory: "Low" };
-  if (nSamples > 80000) return { complexity: base === "High" ? "High" : "Medium", time: "8–20 seconds", memory: "High" };
-  return { complexity: base, time: "3–10 seconds", memory: base === "High" ? "High" : "Moderate" };
+  if (nSamples < 5000) return { complexity: "Low", time: "1-3 seconds", memory: "Low" };
+  if (nSamples > 80000) {
+    return { complexity: base === "High" ? "High" : "Medium", time: "8-20 seconds", memory: "High" };
+  }
+  return { complexity: base, time: "3-10 seconds", memory: base === "High" ? "High" : "Moderate" };
 };
 
 const buildNotChosenReason = (candidate: string, selected: string, nSamples: number) => {
@@ -398,7 +521,7 @@ const buildModelSelectionPanel = (stageResult: Record<string, unknown> | null) =
               <div key={candidate} className="flex items-center justify-between rounded-lg bg-secondary/50 px-3 py-2 text-xs">
                 <div className="flex items-center gap-2">
                   <span className={`text-[10px] ${candidate === selectedModel ? "text-accent" : "text-muted-foreground"}`}>
-                    {candidate === selectedModel ? "✓" : "•"}
+                    {candidate === selectedModel ? "Selected" : "Option"}
                   </span>
                   <span className="font-mono text-[11px] text-foreground">{candidate}</span>
                 </div>
@@ -474,7 +597,7 @@ const buildModelSelectionPanel = (stageResult: Record<string, unknown> | null) =
           {capabilities.length > 0 ? (
             capabilities.map((item) => (
               <div key={item} className="flex items-center gap-2">
-                <span className="text-accent">✓</span>
+                <span className="text-accent">+</span>
                 <span>{item}</span>
               </div>
             ))
@@ -522,11 +645,14 @@ const PreprocessExplanation = ({
   stageResult: Record<string, unknown> | null;
   datasetSummary: DatasetSummary | null;
 }) => {
-  const summary = (stageResult?.explanation as string | undefined) || "We filled missing values, simplified categories, and prepared numeric columns so the model can learn reliably.";
+  const summary =
+    (stageResult?.explanation as string | undefined) ||
+    "We filled missing values, simplified categories, and prepared numeric columns so the model can learn reliably.";
   const train = stageResult?.train_size as number | undefined;
   const test = stageResult?.test_size as number | undefined;
   const total = datasetSummary?.rows;
-  const integrityOK = typeof train === "number" && typeof test === "number" && typeof total === "number" && train + test === total;
+  const integrityOK =
+    typeof train === "number" && typeof test === "number" && typeof total === "number" && train + test === total;
 
   return (
     <div className="space-y-2">
@@ -534,7 +660,7 @@ const PreprocessExplanation = ({
       <ul className="ml-4 list-disc space-y-1 text-sm text-secondary-foreground">
         <li>Any missing values were filled in automatically.</li>
         <li>Columns with categories were converted into numbers so the model can use them.</li>
-        <li>Numeric features were standardized so large ranges don&apos;t dominate the model.</li>
+        <li>Numeric features were standardized so large ranges do not dominate the model.</li>
       </ul>
       {(train || test) && (
         <p className="text-sm text-secondary-foreground">
@@ -542,13 +668,13 @@ const PreprocessExplanation = ({
           {test ? test.toLocaleString() : "?"} rows to test how well the model performs on new data.
         </p>
       )}
-      {integrityOK && <p className="text-sm font-medium text-primary">✔ Dataset integrity preserved (0 rows dropped)</p>}
+      {integrityOK && <p className="text-sm font-medium text-primary">Dataset integrity preserved (0 rows dropped)</p>}
       <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
         {["Raw data", "Clean missing values", "Convert categories", "Prepare numeric columns", "Train/Test split"].map(
           (step, index, arr) => (
             <div key={step} className="flex items-center gap-1">
               <span className="rounded bg-secondary px-2 py-1">{step}</span>
-              {index < arr.length - 1 && <span className="text-muted-foreground">→</span>}
+              {index < arr.length - 1 && <span className="text-muted-foreground">-&gt;</span>}
             </div>
           ),
         )}
