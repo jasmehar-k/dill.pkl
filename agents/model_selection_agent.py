@@ -131,6 +131,10 @@ class ModelSelectionAgent(BaseAgent):
                 "n_samples": n_samples,
                 "n_features": n_features,
                 "selection_source": "llm" if llm_selection else "heuristic",
+                "selected_features": features.get("selected_features", []),
+                "feature_scores": features.get("feature_scores", {}),
+                "applied_transformations": features.get("applied_transformations", []),
+                "_engineered_df": features.get("_engineered_df"),
             }
 
             logger.info(f"Model selection complete: {selected_model}")

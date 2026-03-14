@@ -164,7 +164,18 @@ class Orchestrator:
             self.stage_results["evaluation"] = evaluation_result
             self.stage_statuses["evaluation"] = "completed"
             self.memory.add(Message(role="evaluation", content=str(evaluation_result)))
-            self._logger.info(f"Evaluation complete: {evaluation_result.get('accuracy', 0):.4f}")
+            if evaluation_result.get("task_type") == "regression":
+                self._logger.info(
+                    "Evaluation complete: R2 = %.4f | RMSE = %.4f",
+                    evaluation_result.get("r2", 0.0),
+                    evaluation_result.get("rmse", 0.0),
+                )
+            else:
+                self._logger.info(
+                    "Evaluation complete: accuracy = %.4f | f1 = %.4f",
+                    evaluation_result.get("accuracy", 0.0),
+                    evaluation_result.get("f1", 0.0),
+                )
 
             # Stage 7: Deployment
             self._logger.info("Stage 7: Deploying model")
