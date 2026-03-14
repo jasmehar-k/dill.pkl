@@ -50,7 +50,7 @@ class ExplanationGeneratorAgent(BaseAgent):
             - summary
         """
         try:
-            logger.info("Generating model explanations")
+            # logger.info("Generating model explanations")
 
             model = training_result.get("model")
             task_type = evaluation_result.get("task_type", "classification")
@@ -89,11 +89,11 @@ class ExplanationGeneratorAgent(BaseAgent):
                 "llm_used": bool(llm_explanation),
             }
 
-            logger.info("Explanation generation complete")
+            # logger.info("Explanation generation complete")
             return result
 
         except Exception as e:
-            logger.exception(f"Error in explanation generation: {e}")
+            # logger.exception(f"Error in explanation generation: {e}")
             raise AgentExecutionError(
                 f"Explanation generation failed: {str(e)}",
                 agent_name=self.name,

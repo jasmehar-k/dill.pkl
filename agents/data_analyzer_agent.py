@@ -54,7 +54,7 @@ class DataAnalyzerAgent(BaseAgent):
             - recommendations: list of preprocessing recommendations
         """
         try:
-            logger.info(f"Analyzing dataset with {len(df)} rows and {len(df.columns)} columns")
+            # logger.info(f"Analyzing dataset with {len(df)} rows and {len(df.columns)} columns")
 
             # Basic stats
             row_count = len(df)
@@ -175,11 +175,11 @@ class DataAnalyzerAgent(BaseAgent):
                 "llm_used": llm_insights.get("llm_used", False),
             }
 
-            logger.info(f"Analysis complete: {feature_count} features, {len(high_missing_cols)} cols with high missing")
+            # logger.info(f"Analysis complete: {feature_count} features, {len(high_missing_cols)} cols with high missing")
             return result
 
         except Exception as e:
-            logger.exception(f"Error analyzing dataset: {e}")
+            # logger.exception(f"Error analyzing dataset: {e}")
             raise AgentExecutionError(
                 f"Data analysis failed: {str(e)}",
                 agent_name=self.name,

@@ -7,7 +7,7 @@ export interface PipelineStage {
   description: string;
   details: string;
   tooltipPoints: string[];
-  vizType: "heatmap" | "table" | "barChart" | "lossCurve" | "confusionMatrix" | "metrics";
+  vizType: "heatmap" | "table" | "barChart" | "lossCurve" | "confusionMatrix" | "metrics" | "modelSelection";
   codeSnippet: string;
 }
 
@@ -78,6 +78,25 @@ X_selected = selector.fit_transform(X_train, y_train)
 
 feature_scores = selector.scores_
 top_features = feature_scores.argsort()[-10:]`,
+  },
+  {
+    id: "model_selection",
+    label: "Model Select",
+    icon: "🧭",
+    description: "Choose the best model family and sensible hyperparameters.",
+    details:
+      "Model selection balances dataset size, feature mix, and risk signals to propose a reliable estimator before training begins.",
+    tooltipPoints: [
+      "Evaluates candidate model families",
+      "Selects the most reliable baseline",
+      "Tunes safe starter hyperparameters",
+    ],
+    vizType: "modelSelection",
+    codeSnippet: `candidates = ["RandomForest", "GradientBoosting", "LogisticRegression"]
+selected = candidates[0]
+hyperparameters = {"n_estimators": 100, "max_depth": 10}
+print("Selected model:", selected)
+print("Hyperparameters:", hyperparameters)`,
   },
   {
     id: "training",
