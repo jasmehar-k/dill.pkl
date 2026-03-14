@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, Optional
 
 import numpy as np
 
@@ -63,8 +63,8 @@ def build_evaluation_payload(
     training_result: dict[str, Any],
     evaluation_result: dict[str, Any],
     *,
-    target_column: str | None,
-    technical_logs: list[str] | None = None,
+    target_column: Optional[str],
+    technical_logs: Optional[list[str]] = None,
 ) -> dict[str, Any]:
     """Build a compact, structured payload for evaluation explanations."""
     task_type = str(evaluation_result.get("task_type") or "classification")
@@ -127,8 +127,8 @@ def generate_evaluation_insights(
     training_result: dict[str, Any],
     evaluation_result: dict[str, Any],
     *,
-    target_column: str | None,
-    technical_logs: list[str] | None = None,
+    target_column: Optional[str],
+    technical_logs: Optional[list[str]] = None,
     require_openrouter: bool = False,
 ) -> dict[str, Any]:
     """Generate structured dashboard copy, optionally requiring OpenRouter."""
@@ -642,7 +642,7 @@ def _read_optional_text(payload: dict[str, Any], key: str) -> str:
     return ""
 
 
-def _to_float(value: Any) -> float | None:
+def _to_float(value: Any) -> Optional[float]:
     if isinstance(value, (int, float)) and not np.isnan(value):
         return float(value)
     return None

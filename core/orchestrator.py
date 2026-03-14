@@ -5,7 +5,7 @@ multi-agent AutoML pipeline for machine learning model development.
 """
 
 import logging
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 import pandas as pd
 
@@ -69,6 +69,7 @@ class Orchestrator:
         task_type: str = "classification",
         test_size: float = 0.2,
         random_state: int = 42,
+        cleanup_func: Optional[Callable[[], None]] = None,
     ) -> dict[str, Any]:
         """Run the complete AutoML pipeline.
 
@@ -214,6 +215,12 @@ class Orchestrator:
                 failed_at_stage=list(self.stage_statuses.keys())[-1] if self.stage_statuses else "unknown",
                 details={"error": str(e)},
             ) from e
+        finally:
+            if cleanup_func:
+                try:
+                    cleanup_func()
+                except Exception as cleanup_err:  # pragma: no cover - best effort
+                    self._logger.warning("Cleanup after pipeline failed: %s", cleanup_err)
 
     def get_pipeline_status(self) -> dict[str, str]:
         """Get the current pipeline status."""
@@ -228,6 +235,7 @@ class Orchestrator:
         df: pd.DataFrame,
         target_column: str,
         task_type: str = "classification",
+        cleanup_func: Optional[Callable[[], None]] = None,
     ) -> dict[str, Any]:
         """Synchronous wrapper for running the pipeline.
 
@@ -240,4 +248,4 @@ class Orchestrator:
             Dictionary containing results from all pipeline stages.
         """
         import asyncio
-        return asyncio.run(self.run_pipeline(df, target_column, task_type))
+        return asyncio.run(self.run_pipeline(df, target_column, task_type, cleanup_func=cleanup_func))
