@@ -13,6 +13,7 @@ const ResultsPanel = ({ isComplete, metrics, results, explanation }: ResultsPane
   if (!isComplete) return null;
 
   const packageReady = Boolean(results?.package_ready);
+  const reportReady = Boolean(results?.report_ready);
 
   const downloadMetrics = () => {
     if (!metrics) return;
@@ -73,11 +74,27 @@ const ResultsPanel = ({ isComplete, metrics, results, explanation }: ResultsPane
           <p className="text-sm font-semibold text-foreground">Download deployment package</p>
           <p className="text-[11px] text-muted-foreground">
             {packageReady
-              ? "app.py · schema.json · model.pkl · Dockerfile · docker-compose.yml · README.md"
+              ? "app.py · schema.json · model.pkl · Dockerfile · docker-compose.yml · README.md · report.html"
               : "Package not ready — run the full pipeline first"}
           </p>
         </div>
       </button>
+
+      <div className="grid gap-2 md:grid-cols-2">
+        <button
+          onClick={() => window.open(getDownloadUrl("report"), "_blank", "noopener,noreferrer")}
+          disabled={!reportReady}
+          className="group flex items-center gap-3 rounded-lg bg-secondary/50 p-3 text-left transition-colors hover:bg-surface-hover disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          <span className="text-muted-foreground transition-colors group-hover:text-accent">
+            <FileText className="h-4 w-4" />
+          </span>
+          <div>
+            <p className="text-xs font-medium text-foreground">Open pipeline report (HTML)</p>
+            <p className="text-[10px] text-muted-foreground">Full panel-style run summary with charts</p>
+          </div>
+        </button>
+      </div>
 
       {/* Secondary downloads */}
       <div className="grid gap-2 md:grid-cols-3">

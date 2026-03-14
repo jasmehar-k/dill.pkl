@@ -15,6 +15,7 @@ os.environ['JOBLIB_MMAP_MODE'] = ''
 warnings.filterwarnings("ignore", message="resource_tracker: There appear to be .* leaked .* objects", category=UserWarning)
 warnings.filterwarnings("ignore", message="resource_tracker: .*FileNotFoundError", category=UserWarning)
 
+from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
@@ -28,6 +29,7 @@ from agents.model_selection_agent import ModelSelectionAgent
 from agents.training_agent import TrainingAgent
 from agents.evaluation_agent import EvaluationAgent
 from agents.deployment_agent import DeploymentAgent
+from agents.report_generator import ReportGenerator
 from core.exceptions import AgentExecutionError
 
 
@@ -830,7 +832,16 @@ class TestDeploymentAgent:
         zip_path = result["package_path"]
         assert Path(zip_path).exists(), "Package zip file should exist"
 
-        required_files = {"app.py", "schema.json", "model.pkl", "requirements.txt", "Dockerfile", "docker-compose.yml", "README.md"}
+        required_files = {
+            "app.py",
+            "schema.json",
+            "model.pkl",
+            "requirements.txt",
+            "Dockerfile",
+            "docker-compose.yml",
+            "README.md",
+            "report.html",
+        }
         with zipfile.ZipFile(zip_path, "r") as zf:
             actual_names = set(zf.namelist())
         assert required_files.issubset(actual_names), f"Missing: {required_files - actual_names}"
@@ -934,4 +945,30 @@ class TestDeploymentAgent:
         # At least some lines should have version pins from runtime
         pinned = [line for line in reqs.splitlines() if "==" in line]
         assert len(pinned) > 0, "At least some packages should have pinned versions"
+
+    def test_report_generator_outputs_html(self) -> None:
+        """Report generator should return HTML with key panel sections."""
+        generator = ReportGenerator()
+        assets = generator.generate_assets(
+            pipeline_id="abc123",
+            dataset_name="demo.csv",
+            target_column="target",
+            analysis_result={"row_count": 100, "feature_count": 10, "data_quality": {}, "quality_flags": []},
+            preprocessing_result={"train_size": 80, "test_size": 20, "transformed_feature_count": 12},
+            features_result={"final_feature_count": 12, "selected_features": ["a", "b"]},
+            model_selection_result={"top_candidates": [{"model_name": "RandomForest", "model_family": "tree", "reasoning": "robust"}]},
+            training_result={"model_name": "RandomForest", "best_score": 0.9, "cv_scores": [0.88, 0.9, 0.89]},
+            evaluation_result={"task_type": "classification", "accuracy": 0.92, "f1": 0.9, "confusion_matrix": [[40, 3], [4, 53]]},
+            evaluation_insights={"stage_summary": "Great run", "performance_story": "Strong precision/recall"},
+            explanation_result={"summary": "Model looks stable"},
+        )
+
+        html = assets.get("html")
+        assert isinstance(html, str)
+        assert "Pipeline Report" in html
+        assert "Analysis Panel" in html
+        assert "Preprocessing + Feature Engineering Panels" in html
+        assert "Model Selection Panel" in html
+        assert "Training Panel" in html
+        assert "Evaluation Panel" in html
 

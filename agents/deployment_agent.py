@@ -23,6 +23,7 @@ import numpy as np
 import pandas as pd
 
 from agents.base_agent import BaseAgent
+from agents.report_generator import ReportGenerator
 from core.exceptions import AgentExecutionError
 
 # Ensure outputs directory exists
@@ -64,9 +65,11 @@ class DeploymentAgent(BaseAgent):
         training_result: dict[str, Any],
         evaluation_result: dict[str, Any],
         pipeline_id: Optional[str] = None,
+        dataset_name: Optional[str] = None,
         analysis_result: Optional[dict[str, Any]] = None,
         preprocessing_result: Optional[dict[str, Any]] = None,
         features_result: Optional[dict[str, Any]] = None,
+        model_selection_result: Optional[dict[str, Any]] = None,
         explanation_result: Optional[dict[str, Any]] = None,
         raw_dataset: Optional[pd.DataFrame] = None,
         target_column: Optional[str] = None,
@@ -140,6 +143,24 @@ class DeploymentAgent(BaseAgent):
             )
 
             # ── 4. Assemble package zip ─────────────────────────────────────
+            report_generator = ReportGenerator()
+            report_assets = report_generator.generate_assets(
+                pipeline_id=pipeline_id,
+                dataset_name=dataset_name,
+                target_column=target_column,
+                analysis_result=analysis_result or {},
+                preprocessing_result=preprocessing_result or {},
+                features_result=features_result or {},
+                model_selection_result=model_selection_result or {},
+                training_result=training_result,
+                evaluation_result=evaluation_result,
+                evaluation_insights=evaluation_result.get("llm_insights") if isinstance(evaluation_result, dict) else None,
+                explanation_result=explanation_result or {},
+            )
+
+            report_html_path = OUTPUTS_DIR / f"{pipeline_id}_report.html"
+            report_html_path.write_text(str(report_assets.get("html", "")), encoding="utf-8")
+
             package_path = self._build_package_zip(
                 pipeline_id=pipeline_id,
                 model_path=model_path,
@@ -149,6 +170,7 @@ class DeploymentAgent(BaseAgent):
                 evaluation_result=evaluation_result,
                 explanation_result=explanation_result or {},
                 training_result=training_result,
+                report_html=str(report_assets.get("html") or ""),
             )
 
             # ── 5. Legacy deployment_code for API compatibility ─────────────
@@ -162,6 +184,8 @@ class DeploymentAgent(BaseAgent):
                 "deployment_success": True,
                 "package_path": str(package_path),
                 "package_ready": True,
+                "report_path": str(report_html_path),
+                "report_ready": True,
             }
 
         except Exception as e:
@@ -278,6 +302,7 @@ class DeploymentAgent(BaseAgent):
         evaluation_result: dict[str, Any],
         explanation_result: dict[str, Any],
         training_result: dict[str, Any],
+        report_html: str,
     ) -> Path:
         """Assemble all package files into a zip and return its path."""
         zip_path = OUTPUTS_DIR / f"{pipeline_id}_deployment_package.zip"
@@ -299,6 +324,7 @@ class DeploymentAgent(BaseAgent):
             zf.writestr("Dockerfile", self._render_dockerfile())
             zf.writestr("docker-compose.yml", self._render_docker_compose(pipeline_id))
             zf.writestr("README.md", readme_text)
+            zf.writestr("report.html", report_html)
 
         return zip_path
 

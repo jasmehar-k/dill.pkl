@@ -24,7 +24,7 @@ import numpy as np
 import pandas as pd
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from pydantic import BaseModel
 from config import settings
 from utils.logger import get_logger
@@ -293,6 +293,8 @@ def summarize_stage_result(stage: str, result: Optional[dict[str, Any]]) -> Opti
             "deployment_code",
             "package_path",
             "package_ready",
+            "report_path",
+            "report_ready",
         ],
     }
 
@@ -678,6 +680,7 @@ async def run_pipeline_stage(stage: str, config: PipelineConfig):
 
             analysis = pipeline_state.stage_results.get("analysis", {})
             features = pipeline_state.stage_results.get("features", {})
+            model_selection = pipeline_state.stage_results.get("model_selection", {})
             agent = ModelSelectionAgent()
             model_result = await agent.run(
                 pipeline_state.dataset,
@@ -832,6 +835,7 @@ async def run_pipeline_stage(stage: str, config: PipelineConfig):
             analysis = pipeline_state.stage_results.get("analysis", {})
             preprocessing = pipeline_state.stage_results.get("preprocessing", {})
             features = pipeline_state.stage_results.get("features", {})
+            model_selection = pipeline_state.stage_results.get("model_selection", {})
 
             # Run explanation first so README generation has richer context
             explanation_agent = ExplanationGeneratorAgent()
@@ -856,9 +860,11 @@ async def run_pipeline_stage(stage: str, config: PipelineConfig):
                 training,
                 evaluation,
                 pipeline_state.pipeline_id,
+                dataset_name=pipeline_state.dataset_filename,
                 analysis_result=analysis,
                 preprocessing_result=preprocessing,
                 features_result=features,
+                model_selection_result=model_selection,
                 explanation_result=explanation_result,
                 raw_dataset=pipeline_state.dataset,
                 target_column=pipeline_state.target_column,
@@ -868,8 +874,11 @@ async def run_pipeline_stage(stage: str, config: PipelineConfig):
             add_log(stage, f"Model saved to: {result.get('model_path', 'unknown')}")
             if result.get("package_ready"):
                 add_log(stage, "Deployment package ready for download")
+            if result.get("report_ready"):
+                add_log(stage, "Pipeline report is ready (HTML)")
+                
             cleanup_upload()
-
+        
         pipeline_state.stage_statuses[stage] = "completed"
         add_log(stage, f"{stage} stage completed successfully")
         logger.info(
@@ -1174,6 +1183,22 @@ async def download_deployment_package():
         filename=filename,
         media_type="application/zip",
     )
+
+
+@app.get("/api/results/download/report")
+async def download_report():
+    """Download the generated pipeline HTML report."""
+    results = pipeline_state.stage_results.get("results", {})
+    report_path = results.get("report_path")
+
+    if not report_path or not Path(report_path).exists():
+        raise HTTPException(
+            status_code=404,
+            detail="Pipeline report not available. Run the full pipeline first.",
+        )
+
+    content = Path(report_path).read_text(encoding="utf-8")
+    return HTMLResponse(content=content)
 
 
 @app.get("/api/results/download/logs")
