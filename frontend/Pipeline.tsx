@@ -137,7 +137,7 @@ const Pipeline = () => {
       try {
         setExplanation(await getExplanation());
       } catch {
-        setExplanation(null);
+        // Keep any existing explanation; retry via effect.
       }
     } else {
       setExplanation(null);
@@ -152,6 +152,24 @@ const Pipeline = () => {
       }
     });
   }, [refreshPipelineData]);
+
+  useEffect(() => {
+    if (pipelineStatus.results !== "completed" || explanation) return;
+    let cancelled = false;
+    const timeout = setTimeout(() => {
+      void getExplanation()
+        .then((data) => {
+          if (!cancelled) setExplanation(data);
+        })
+        .catch(() => {
+          // Silent retry; will attempt again on next refresh.
+        });
+    }, 800);
+    return () => {
+      cancelled = true;
+      clearTimeout(timeout);
+    };
+  }, [explanation, pipelineStatus.results]);
 
   const handleUpload = useCallback(async (file: File) => {
     setIsUploading(true);
@@ -223,17 +241,16 @@ const Pipeline = () => {
 
       try {
         const response = await runPipelineStage(stageId, config);
+        const status = response.status as StageStatus;
         setPipelineStatus((current) => ({
           ...current,
-          [stageId]: response.status,
+          [stageId]: status,
         }));
 
-        if (response.result) {
-          setStageResults((current) => ({
-            ...current,
-            [stageId]: response.result,
-          }));
-        }
+        setStageResults((current) => ({
+          ...current,
+          [stageId]: response.result || {},
+        }));
 
         await refreshLogs();
 
@@ -248,7 +265,7 @@ const Pipeline = () => {
           try {
             setExplanation(await getExplanation());
           } catch {
-            setExplanation(null);
+            // Keep any existing explanation; allow retry later.
           }
         }
       } catch (err) {
@@ -381,6 +398,8 @@ const Pipeline = () => {
           datasetSummary={datasetSummary}
           metrics={metrics}
           stageLogs={selectedStage ? stageLogs[selectedStage.id] || [] : []}
+          taskType={taskType}
+          targetColumn={selectedColumn}
           explanation={explanation}
           onClose={() => setSelectedStage(null)}
         />

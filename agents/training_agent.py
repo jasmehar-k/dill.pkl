@@ -72,15 +72,34 @@ class TrainingAgent(BaseAgent):
             # Get target column from model selection
             target_column = model_selection.get("target_column", df.columns[-1])
             task_type = model_selection.get("task_type", "classification")
+            selected_features = model_selection.get("selected_features", [])
+            engineered_df = model_selection.get("_engineered_df")
 
             # Prepare data
-            X = df.drop(columns=[target_column])
+            feature_source = (
+                engineered_df.copy()
+                if isinstance(engineered_df, pd.DataFrame)
+                else df.drop(columns=[target_column]).copy()
+            )
+            if selected_features:
+                available_features = [
+                    column for column in selected_features
+                    if column in feature_source.columns
+                ]
+                X = feature_source[available_features].copy()
+            else:
+                X = feature_source.copy()
             y = df[target_column]
 
-            # Handle categorical columns
+            # Handle categorical columns deterministically.
             for col in X.columns:
-                if X[col].dtype == "object":
-                    X[col] = pd.Categorical(X[col]).codes
+                if not pd.api.types.is_numeric_dtype(X[col]):
+                    values = X[col].astype(str)
+                    categories = sorted(values.unique().tolist())
+                    X[col] = pd.Categorical(values, categories=categories).codes
+
+            if X.empty:
+                raise ValueError("No features available for training after feature selection")
 
             # Split data
             X_train, X_test, y_train, y_test = train_test_split(
@@ -136,6 +155,7 @@ class TrainingAgent(BaseAgent):
                 "X_test": X_test,
                 "y_train": y_train,
                 "y_test": y_test,
+                "selected_features": list(X.columns),
             }
 
             # logger.info(f"Training complete: CV score = {cv_scores.mean():.4f}")

@@ -2,8 +2,9 @@ import { useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { X } from "lucide-react";
 import type { PipelineStage } from "@/data/pipelineStages";
-import type { DatasetSummary, MetricsResponse } from "@/lib/api";
+import type { DatasetPreviewResponse, DatasetSummary, MetricsResponse, TaskType } from "@/lib/api";
 import { getDatasetPreview } from "@/lib/api";
+import FeatureEngineeringDashboard from "./FeatureEngineeringDashboard";
 import { StageVisualization } from "./StageVisualizations";
 
 interface StageDetailPanelProps {
@@ -12,6 +13,8 @@ interface StageDetailPanelProps {
   datasetSummary: DatasetSummary | null;
   metrics: MetricsResponse | null;
   stageLogs: string[];
+  taskType: TaskType;
+  targetColumn: string | null;
   explanation?: Record<string, unknown> | null;
   onClose: () => void;
 }
@@ -22,19 +25,28 @@ const StageDetailPanel = ({
   datasetSummary,
   metrics,
   stageLogs,
+  taskType,
+  targetColumn,
   explanation,
   onClose,
 }: StageDetailPanelProps) => {
-  const [datasetPreview, setDatasetPreview] = useState<{ rows: Array<Record<string, unknown>>; columns: string[] } | null>(null);
+  const [datasetPreview, setDatasetPreview] = useState<DatasetPreviewResponse | null>(null);
   const [isLoadingPreview, setIsLoadingPreview] = useState(false);
-  const highlights = stage ? buildHighlights(stage.id, stageResult, datasetSummary, metrics) : [];
-  const modelPanel = stage?.id === "model_selection" ? buildModelSelectionPanel(stageResult) : null;
+
+  const isFeatureStage = stage?.id === "features";
   const isPreprocessing = stage?.id === "preprocessing";
+  const isModelSelection = stage?.id === "model_selection";
+  const isResults = stage?.id === "results";
+
+  const highlights = stage ? buildHighlights(stage.id, stageResult, datasetSummary, metrics) : [];
+  const panelWidthClass = getPanelWidthClass(stage?.id ?? "");
+
   const explanationSummary = explanation?.summary ? String(explanation.summary) : "";
   const pipelineSummary = explanation?.pipeline_summary ? String(explanation.pipeline_summary) : "";
   const explanationBullets = Array.isArray(explanation?.explanations)
     ? (explanation?.explanations as string[]).map((item) => String(item)).filter(Boolean)
     : [];
+
   const summaryLines = explanationSummary
     .split("\n")
     .map((line) => line.trim())
@@ -43,11 +55,13 @@ const StageDetailPanel = ({
   const summaryBullets = summaryLines.filter((line) => /^\d+\./.test(line)).map((line) => line.replace(/^\d+\.\s*/, ""));
   const summaryText = summaryLines.filter((line) => !/^\d+\./.test(line) && !line.toLowerCase().startsWith("final decision:"));
   const summaryDecision = summaryLines.find((line) => line.toLowerCase().startsWith("final decision:"));
+
   const pipelineLines = pipelineSummary
     .split("\n")
     .map((line) => line.trim())
     .filter(Boolean)
     .map((line) => line.replace(/^-+\s*/, ""));
+
   const aboutText = useMemo(() => {
     if (!stage) return "";
     if (isPreprocessing) {
@@ -57,7 +71,12 @@ const StageDetailPanel = ({
   }, [isPreprocessing, stage]);
 
   useEffect(() => {
-    if (!isPreprocessing || !stage) return;
+    if (!isPreprocessing || !stage) {
+      setDatasetPreview(null);
+      setIsLoadingPreview(false);
+      return;
+    }
+
     setIsLoadingPreview(true);
     void getDatasetPreview(5)
       .then(setDatasetPreview)
@@ -77,7 +96,7 @@ const StageDetailPanel = ({
             onClick={onClose}
           />
           <motion.div
-            className="glass-card fixed right-0 top-0 z-50 h-full w-full max-w-lg overflow-y-auto border-l border-border/50 scrollbar-thin"
+            className={`glass-card fixed right-0 top-0 z-50 h-full w-full overflow-y-auto border-l border-border/50 scrollbar-thin ${panelWidthClass}`}
             initial={{ x: "100%" }}
             animate={{ x: 0 }}
             exit={{ x: "100%" }}
@@ -93,24 +112,53 @@ const StageDetailPanel = ({
                 </button>
               </div>
 
-              <div className="space-y-2">
-                <h3 className="text-sm font-medium text-accent">About this stage</h3>
-                <p className="text-sm leading-relaxed text-secondary-foreground">{aboutText}</p>
-              </div>
+              {isFeatureStage ? (
+                <FeatureEngineeringDashboard
+                  stage={stage}
+                  stageResult={stageResult}
+                  metrics={metrics}
+                  stageLogs={stageLogs}
+                  taskType={taskType}
+                  targetColumn={targetColumn}
+                />
+              ) : (
+                <>
+                  <div className="space-y-2">
+                    <h3 className="text-sm font-medium text-accent">About this stage</h3>
+                    <p className="text-sm leading-relaxed text-secondary-foreground">{aboutText}</p>
+                  </div>
 
-              {stage.id === "results" && (explanationSummary || pipelineSummary || explanationBullets.length > 0) && (
-                <div className="space-y-3">
-                  <h3 className="text-sm font-medium text-accent">Pipeline recap</h3>
-                  {(summaryText.length > 0 || summaryBullets.length > 0 || summaryDecision) && (
-                    <div className="glass-card space-y-2 p-4 text-[11px] text-secondary-foreground">
-                      {summaryText.map((line) => (
-                        <p key={line} className="text-secondary-foreground">
-                          {line}
-                        </p>
-                      ))}
-                      {summaryBullets.length > 0 && (
-                        <div className="space-y-1">
-                          {summaryBullets.map((item, index) => (
+                  {isResults && (explanationSummary || pipelineSummary || explanationBullets.length > 0) && (
+                    <div className="space-y-3">
+                      <h3 className="text-sm font-medium text-accent">Pipeline recap</h3>
+                      {(summaryText.length > 0 || summaryBullets.length > 0 || summaryDecision) && (
+                        <div className="glass-card space-y-2 p-4 text-[11px] text-secondary-foreground">
+                          {summaryText.map((line) => (
+                            <p key={line} className="text-secondary-foreground">
+                              {line}
+                            </p>
+                          ))}
+                          {summaryBullets.length > 0 && (
+                            <div className="space-y-1">
+                              {summaryBullets.map((item, index) => (
+                                <div key={`${item}-${index}`} className="flex items-start gap-2">
+                                  <span className="text-accent">•</span>
+                                  <span>{item}</span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                          {summaryDecision && (
+                            <p className="text-[11px] font-semibold uppercase tracking-wide text-primary">
+                              {summaryDecision}
+                            </p>
+                          )}
+                        </div>
+                      )}
+
+                      {explanationBullets.length > 0 && (
+                        <div className="glass-card space-y-1 p-4 text-[11px] text-secondary-foreground">
+                          {explanationBullets.map((item, index) => (
                             <div key={`${item}-${index}`} className="flex items-start gap-2">
                               <span className="text-accent">•</span>
                               <span>{item}</span>
@@ -118,150 +166,96 @@ const StageDetailPanel = ({
                           ))}
                         </div>
                       )}
-                      {summaryDecision && (
-                        <p className="text-[11px] font-semibold uppercase tracking-wide text-primary">
-                          {summaryDecision}
-                        </p>
+
+                      {pipelineLines.length > 0 && (
+                        <div className="glass-card space-y-1 p-4 text-[11px] text-secondary-foreground">
+                          {pipelineLines.map((line, index) => (
+                            <div key={`${line}-${index}`} className="flex items-start gap-2">
+                              <span className="text-accent">•</span>
+                              <span>{line}</span>
+                            </div>
+                          ))}
+                        </div>
                       )}
                     </div>
                   )}
 
-                  {explanationBullets.length > 0 && (
-                    <div className="glass-card space-y-1 p-4 text-[11px] text-secondary-foreground">
-                      {explanationBullets.map((item, index) => (
-                        <div key={`${item}-${index}`} className="flex items-start gap-2">
-                          <span className="text-accent">•</span>
-                          <span>{item}</span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-
-                  {pipelineLines.length > 0 && (
-                    <div className="glass-card space-y-1 p-4 text-[11px] text-secondary-foreground">
-                      {pipelineLines.map((line, index) => (
-                        <div key={`${line}-${index}`} className="flex items-start gap-2">
-                          <span className="text-accent">•</span>
-                          <span>{line}</span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {highlights.length > 0 && (
-                <div className="space-y-3">
-                  <h3 className="text-sm font-medium text-accent">Stage highlights</h3>
-                  <div className="grid grid-cols-2 gap-2">
-                    {highlights.map((highlight) => (
-                      <div key={highlight.label} className="glass-card space-y-1 p-3">
-                        <p className="text-[10px] text-muted-foreground">{highlight.label}</p>
-                        <p className="font-mono text-sm text-foreground">{highlight.value}</p>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {modelPanel}
-
-              {stage.id !== "model_selection" && (
-                <>
-                  {stage.id !== "results" && (
-                    <div className="space-y-2">
-                      <h3 className="text-sm font-medium text-accent">
-                        {isPreprocessing ? "Dataset overview" : "Visualization"}
-                      </h3>
-                      <div className="glass-card p-4">
-                        <StageVisualization
-                          stage={stage}
-                          stageResult={stageResult}
-                          datasetSummary={datasetSummary}
-                          metrics={metrics}
-                        />
-                      </div>
-                    </div>
-                  )}
-
-                  <div className="space-y-2">
-                    {stage.id !== "results" && (
-                      <h3 className="text-sm font-medium text-accent">
-                        {isPreprocessing ? "How we prepared your data" : "Stage logs"}
-                      </h3>
-                    )}
-                    {stage.id !== "results" && (
-                      <div className="glass-card space-y-2 p-4 text-sm leading-relaxed text-secondary-foreground">
-                        {isPreprocessing ? (
-                          <PreprocessExplanation stageResult={stageResult} datasetSummary={datasetSummary} />
-                        ) : (
-                          <div className="max-h-48 space-y-2 overflow-y-auto font-mono text-[11px] scrollbar-thin">
-                            {stageLogs.length > 0 ? (
-                              stageLogs.map((log, index) => (
-                                <p
-                                  key={`${stage.id}-${index}`}
-                                  className={`whitespace-pre-wrap leading-relaxed ${
-                                    log.includes(" summary:")
-                                      ? "text-accent"
-                                      : log.includes(" overall:")
-                                        ? "text-primary"
-                                        : "text-foreground/75"
-                                  }`}
-                                >
-                                  {log}
-                                </p>
-                              ))
-                            ) : (
-                              <p className="text-muted-foreground">No logs recorded for this stage yet.</p>
-                            )}
+                  {highlights.length > 0 && !isModelSelection && (
+                    <div className="space-y-3">
+                      <h3 className="text-sm font-medium text-accent">Stage highlights</h3>
+                      <div className="grid grid-cols-2 gap-2">
+                        {highlights.map((highlight) => (
+                          <div key={highlight.label} className="glass-card space-y-1 p-3">
+                            <p className="text-[10px] text-muted-foreground">{highlight.label}</p>
+                            <p className="font-mono text-sm text-foreground">{highlight.value}</p>
                           </div>
-                        )}
+                        ))}
                       </div>
-                    )}
-                  </div>
-
-                  {!isPreprocessing && stage.id !== "results" && (
-                    <div className="space-y-2">
-                      <h3 className="text-sm font-medium text-accent">Code</h3>
-                      <pre className="glass-card overflow-x-auto whitespace-pre-wrap p-4 font-mono text-[12px] leading-relaxed text-foreground/80">
-                        {stage.codeSnippet}
-                      </pre>
                     </div>
                   )}
 
-                  {isPreprocessing && (
-                    <div className="space-y-2">
-                      <h3 className="text-sm font-medium text-accent">Dataset preview</h3>
-                      <div className="glass-card overflow-auto p-3">
-                        {isLoadingPreview && <p className="text-muted-foreground text-sm">Loading sample rows...</p>}
-                        {!isLoadingPreview && datasetPreview && datasetPreview.rows.length > 0 ? (
-                          <table className="min-w-full text-left text-[11px]">
-                            <thead className="text-muted-foreground">
-                              <tr>
-                                {datasetPreview.columns.map((col) => (
-                                  <th key={col} className="px-2 py-1 font-medium">
-                                    {col}
-                                  </th>
-                                ))}
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {datasetPreview.rows.map((row, idx) => (
-                                <tr key={idx} className="border-b border-border/50">
-                                  {datasetPreview.columns.map((col) => (
-                                    <td key={col} className="px-2 py-1">
-                                      {String(row[col] ?? "")}
-                                    </td>
-                                  ))}
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        ) : (
-                          !isLoadingPreview && <p className="text-muted-foreground text-sm">Preview not available.</p>
-                        )}
-                      </div>
-                    </div>
+                  {isModelSelection && buildModelSelectionPanel(stageResult)}
+
+                  {isPreprocessing ? (
+                    <>
+                      {!isResults && (
+                        <div className="space-y-2">
+                          <h3 className="text-sm font-medium text-accent">Dataset overview</h3>
+                          <div className="glass-card p-4">
+                            <StageVisualization
+                              stage={stage}
+                              stageResult={stageResult}
+                              datasetSummary={datasetSummary}
+                              metrics={metrics}
+                            />
+                          </div>
+                        </div>
+                      )}
+
+                      {!isResults && (
+                        <div className="space-y-2">
+                          <h3 className="text-sm font-medium text-accent">How we prepared your data</h3>
+                          <div className="glass-card space-y-2 p-4 text-sm leading-relaxed text-secondary-foreground">
+                            <PreprocessExplanation stageResult={stageResult} datasetSummary={datasetSummary} />
+                          </div>
+                        </div>
+                      )}
+
+                      {!isResults && (
+                        <div className="space-y-2">
+                          <h3 className="text-sm font-medium text-accent">Dataset preview</h3>
+                          <DatasetPreviewCard datasetPreview={datasetPreview} isLoadingPreview={isLoadingPreview} />
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      {!isModelSelection && !isResults && (
+                        <div className="space-y-2">
+                          <h3 className="text-sm font-medium text-accent">Visualization</h3>
+                          <div className="glass-card p-4">
+                            <StageVisualization
+                              stage={stage}
+                              stageResult={stageResult}
+                              datasetSummary={datasetSummary}
+                              metrics={metrics}
+                            />
+                          </div>
+                        </div>
+                      )}
+
+                      {!isModelSelection && !isResults && (
+                        <>
+                          <StageLogs stage={stage} stageLogs={stageLogs} />
+                          <div className="space-y-2">
+                            <h3 className="text-sm font-medium text-accent">Code</h3>
+                            <pre className="glass-card overflow-x-auto whitespace-pre-wrap p-4 font-mono text-[12px] leading-relaxed text-foreground/80">
+                              {stage.codeSnippet}
+                            </pre>
+                          </div>
+                        </>
+                      )}
+                    </>
                   )}
                 </>
               )}
@@ -271,6 +265,84 @@ const StageDetailPanel = ({
       )}
     </AnimatePresence>
   );
+};
+
+const DatasetPreviewCard = ({
+  datasetPreview,
+  isLoadingPreview,
+}: {
+  datasetPreview: DatasetPreviewResponse | null;
+  isLoadingPreview: boolean;
+}) => (
+  <div className="glass-card overflow-auto p-3">
+    {isLoadingPreview && <p className="text-sm text-muted-foreground">Loading sample rows...</p>}
+    {!isLoadingPreview && datasetPreview && datasetPreview.rows.length > 0 ? (
+      <table className="min-w-full text-left text-[11px]">
+        <thead className="text-muted-foreground">
+          <tr>
+            {datasetPreview.columns.map((column) => (
+              <th key={column} className="px-2 py-1 font-medium">
+                {column}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {datasetPreview.rows.map((row, rowIndex) => (
+            <tr key={rowIndex} className="border-b border-border/50">
+              {datasetPreview.columns.map((column) => (
+                <td key={column} className="px-2 py-1">
+                  {String(row[column] ?? "")}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    ) : (
+      !isLoadingPreview && <p className="text-sm text-muted-foreground">Preview not available.</p>
+    )}
+  </div>
+);
+
+const StageLogs = ({
+  stage,
+  stageLogs,
+}: {
+  stage: PipelineStage;
+  stageLogs: string[];
+}) => (
+  <div className="space-y-2">
+    <h3 className="text-sm font-medium text-accent">Stage logs</h3>
+    <div className="glass-card max-h-48 space-y-2 overflow-y-auto p-4 font-mono text-[11px] scrollbar-thin">
+      {stageLogs.length > 0 ? (
+        stageLogs.map((log, index) => (
+          <p
+            key={`${stage.id}-${index}`}
+            className={`whitespace-pre-wrap leading-relaxed ${
+              log.includes(" summary:")
+                ? "text-accent"
+                : log.includes(" overall:")
+                  ? "text-primary"
+                  : "text-foreground/75"
+            }`}
+          >
+            {log}
+          </p>
+        ))
+      ) : (
+        <p className="text-muted-foreground">No logs recorded for this stage yet.</p>
+      )}
+    </div>
+  </div>
+);
+
+const getPanelWidthClass = (stageId: string) => {
+  if (stageId === "features") return "max-w-[min(96vw,1200px)]";
+  if (stageId === "model_selection" || stageId === "preprocessing") {
+    return "max-w-[min(92vw,960px)]";
+  }
+  return "max-w-lg";
 };
 
 const buildHighlights = (
@@ -300,7 +372,9 @@ const buildHighlights = (
         { label: "Selected", value: String(stageResult?.final_feature_count ?? "Pending") },
         {
           label: "Scored features",
-          value: String(Object.keys((stageResult?.feature_scores as Record<string, number> | undefined) || {}).length || 0),
+          value: String(
+            Object.keys((stageResult?.feature_scores as Record<string, number> | undefined) || {}).length || 0,
+          ),
         },
         {
           label: "PCA",
@@ -308,9 +382,7 @@ const buildHighlights = (
         },
       ];
     case "model_selection":
-      return [
-        { label: "Selected model", value: String(stageResult?.selected_model ?? "Pending") },
-      ];
+      return [{ label: "Selected model", value: String(stageResult?.selected_model ?? "Pending") }];
     case "training":
       return [
         { label: "Model", value: String(stageResult?.model_name ?? metrics?.model_name ?? "Pending") },
@@ -634,11 +706,14 @@ const PreprocessExplanation = ({
   stageResult: Record<string, unknown> | null;
   datasetSummary: DatasetSummary | null;
 }) => {
-  const summary = (stageResult?.explanation as string | undefined) || "We filled missing values, simplified categories, and prepared numeric columns so the model can learn reliably.";
+  const summary =
+    (stageResult?.explanation as string | undefined) ||
+    "We filled missing values, simplified categories, and prepared numeric columns so the model can learn reliably.";
   const train = stageResult?.train_size as number | undefined;
   const test = stageResult?.test_size as number | undefined;
   const total = datasetSummary?.rows;
-  const integrityOK = typeof train === "number" && typeof test === "number" && typeof total === "number" && train + test === total;
+  const integrityOK =
+    typeof train === "number" && typeof test === "number" && typeof total === "number" && train + test === total;
 
   return (
     <div className="space-y-2">

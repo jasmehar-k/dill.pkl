@@ -1,6 +1,5 @@
 # dill.pkl
 
-<<<<<<< HEAD
 Project layout:
 
 - `front end/` contains the React + Vite frontend
@@ -13,7 +12,6 @@ cd "front end"
 npm install
 npm run dev
 ```
-=======
 ## Inspiration
 
 ## What it does
@@ -27,7 +25,6 @@ npm run dev
 ## What we learned
 
 ## What's next for dill.pkl
->>>>>>> 2bb71e5592582795f0a7f03696a929a5f191a74d
 
 
 ## Agents
@@ -98,14 +95,6 @@ decisions:
 - "performance poor -> reject"
 
 ### Explanation generator
-what it does:
-- creates human-readable explanations 
-- SHAP/LIME for feature importance
-- generates reports
-output:
-- feature importance rankings
-- decision boundaries visualization
-- reasoning for each choice
 
 ### Deployment agent
 what it does:

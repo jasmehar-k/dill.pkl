@@ -218,6 +218,13 @@ def summarize_stage_result(stage: str, result: Optional[dict[str, Any]]) -> Opti
     return make_json_safe(selected)
 
 
+def format_evaluation_log(result: dict[str, Any]) -> str:
+    """Format an evaluation-stage summary for logs."""
+    if result.get("task_type") == "regression":
+        return f"Evaluation complete: R2 = {result.get('r2', 0):.4f}, RMSE = {result.get('rmse', 0):.4f}"
+    return f"Evaluation complete: Accuracy = {result.get('accuracy', 0):.4f}, F1 = {result.get('f1', 0):.4f}"
+
+
 async def run_pipeline_stage(stage: str, config: PipelineConfig):
     """Run a single pipeline stage and update state."""
     pipeline_state.stage_statuses[stage] = "running"
@@ -353,7 +360,7 @@ async def run_pipeline_stage(stage: str, config: PipelineConfig):
             )
             pipeline_state.stage_results["evaluation"] = result
             add_agent_summary_logs("evaluation", result)
-            add_log(stage, f"Evaluation complete: Accuracy = {result.get('accuracy', 0):.4f}")
+            add_log(stage, format_evaluation_log(result))
 
         elif stage == "results":
             from agents.deployment_agent import DeploymentAgent

@@ -64,20 +64,26 @@ numeric_pipe = Pipeline([
     icon: "🧠",
     description: "Select and engineer the features that best explain the target.",
     details:
-      "Feature engineering reduces noise, surfaces strong predictors, and creates useful interactions that make the downstream model more expressive.",
+      "Feature engineering cleans raw columns, creates a small set of smarter interactions, removes redundant signals, and ranks the final features before model training.",
     tooltipPoints: [
-      "Ranks candidate predictors",
-      "Drops weak or redundant columns",
-      "Creates a small set of interaction features",
+      "Cleans and reshapes the feature space",
+      "Creates bounded interaction features",
+      "Keeps the strongest final predictors",
     ],
     vizType: "barChart",
-    codeSnippet: `from sklearn.feature_selection import SelectKBest, f_regression
+    codeSnippet: `numeric_columns = X.select_dtypes(include="number").columns
+top_numeric = X[numeric_columns].var().sort_values(ascending=False).head(5).index
 
-selector = SelectKBest(score_func=f_regression, k=10)
-X_selected = selector.fit_transform(X_train, y_train)
+for left, right in combinations(top_numeric, 2):
+    X[f"{left}__mul__{right}"] = X[left] * X[right]
+    X[f"{left}__div__{right}"] = (X[left] / X[right].replace(0, np.nan)).fillna(0)
 
-feature_scores = selector.scores_
-top_features = feature_scores.argsort()[-10:]`,
+encoded_X = encode_categorical_columns(X)
+forest = RandomForestRegressor(n_estimators=50, random_state=42)
+forest.fit(encoded_X, y)
+
+feature_scores = dict(zip(encoded_X.columns, forest.feature_importances_))
+selected_features = [name for name, score in feature_scores.items() if score >= 0.01]`,
   },
   {
     id: "model_selection",
