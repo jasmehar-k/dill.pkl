@@ -228,6 +228,26 @@ def summarize_stage_result(stage: str, result: Optional[dict[str, Any]]) -> Opti
         return None
 
     stage_keys: dict[str, list[str]] = {
+        "analysis": [
+            "row_count",
+            "column_count",
+            "feature_count",
+            "numeric_columns",
+            "categorical_columns",
+            "missing_values",
+            "high_missing_columns",
+            "correlations",
+            "high_correlation_pairs",
+            "outliers",
+            "class_distribution",
+            "target_column",
+            "recommendations",
+            "analysis_summary",
+            "risk_level",
+            "data_quality",
+            "quality_flags",
+            "llm_used",
+        ],
         "training": [
             "model_name",
             "best_score",
@@ -568,7 +588,22 @@ async def run_pipeline_stage(stage: str, config: PipelineConfig):
             )
             pipeline_state.stage_results["analysis"] = result
             add_agent_summary_logs("analysis", result)
-            add_log(stage, f"Analysis complete: {result.get('row_count', 0)} rows, {result.get('feature_count', 0)} features")
+            risk = result.get("risk_level") or "n/a"
+            add_log(
+                stage,
+                f"Analysis complete: {result.get('row_count', 0)} rows, "
+                f"{result.get('feature_count', 0)} features, risk={risk}",
+            )
+            dq = result.get("data_quality") or {}
+            quality_parts: list[str] = []
+            if dq.get("duplicate_rows", 0):
+                quality_parts.append(f"{dq['duplicate_rows']} duplicate rows")
+            if dq.get("placeholder_invalid_count", 0):
+                quality_parts.append(f"{dq['placeholder_invalid_count']} placeholder-invalid column(s)")
+            if dq.get("leakage_risk_columns"):
+                quality_parts.append(f"{len(dq['leakage_risk_columns'])} leakage-risk column(s)")
+            if quality_parts:
+                add_log(stage, "Quality signals: " + ", ".join(quality_parts))
 
         elif stage == "preprocessing":
             from agents.preprocessor_agent import PreprocessorAgent
