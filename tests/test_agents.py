@@ -103,6 +103,89 @@ class TestDataAnalyzerAgent:
         assert "missing_values" in result
         assert result["missing_values"]["feature1"] == 0.2
 
+    @pytest.mark.asyncio
+    async def test_data_analyzer_returns_data_quality_key(self) -> None:
+        """Test that data_quality and quality_flags keys are present in result."""
+        df = pd.DataFrame({
+            "feature1": [1, 2, 3, 4, 5],
+            "feature2": [5.0, 4.0, 3.0, 2.0, 1.0],
+            "target": [0, 1, 0, 1, 0],
+        })
+        agent = DataAnalyzerAgent()
+        result = await agent.execute(df, "target")
+
+        assert "data_quality" in result
+        assert "quality_flags" in result
+        dq = result["data_quality"]
+        assert "duplicate_rows" in dq
+        assert "missing_rows_pct" in dq
+        assert "outlier_columns_count" in dq
+        assert isinstance(result["quality_flags"], list)
+
+    @pytest.mark.asyncio
+    async def test_data_analyzer_detects_duplicates(self) -> None:
+        """Test that the agent correctly counts duplicate rows."""
+        df = pd.DataFrame({
+            "feature1": [1, 1, 1, 2, 3],
+            "feature2": [10.0, 10.0, 10.0, 20.0, 30.0],
+            "target": [0, 0, 0, 1, 1],
+        })
+        agent = DataAnalyzerAgent()
+        result = await agent.execute(df, "target")
+
+        dq = result["data_quality"]
+        # rows 0, 1, 2 are all identical — 2 duplicates
+        assert dq["duplicate_rows"] == 2
+        assert dq["duplicate_pct"] == pytest.approx(40.0)
+
+    @pytest.mark.asyncio
+    async def test_data_analyzer_detects_high_cardinality(self) -> None:
+        """Test that high-cardinality categorical columns are flagged."""
+        unique_cats = [str(i) for i in range(100)]
+        df = pd.DataFrame({
+            "id_col": unique_cats,
+            "numeric": list(range(100)),
+            "target": [i % 2 for i in range(100)],
+        })
+        agent = DataAnalyzerAgent()
+        result = await agent.execute(df, "target")
+
+        dq = result["data_quality"]
+        assert dq["high_cardinality_count"] >= 1
+        assert "id_col" in dq["high_cardinality_columns"]
+
+    @pytest.mark.asyncio
+    async def test_data_analyzer_detects_placeholder_invalids(self) -> None:
+        """Test that placeholder sentinel values (-999) are detected in numeric columns."""
+        df = pd.DataFrame({
+            "price": [-999, -999, -999, 10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0],
+            "area": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0],
+            "target": [0, 1, 0, 1, 0, 1, 0, 1, 0, 1],
+        })
+        agent = DataAnalyzerAgent()
+        result = await agent.execute(df, "target")
+
+        dq = result["data_quality"]
+        assert dq["placeholder_invalid_count"] >= 1
+        assert "price" in dq["placeholder_invalid_columns"]
+
+    @pytest.mark.asyncio
+    async def test_data_analyzer_quality_flags_have_severity(self) -> None:
+        """Test that quality flags include severity, message, and field keys."""
+        df = pd.DataFrame({
+            "a": [1, 1, 1, 2, 3, 4, 5, 6, 7, 8],
+            "b": [10.0] * 10,
+            "target": [0, 0, 0, 1, 0, 1, 0, 1, 0, 1],
+        })
+        agent = DataAnalyzerAgent()
+        result = await agent.execute(df, "target")
+
+        for flag in result["quality_flags"]:
+            assert "severity" in flag
+            assert "message" in flag
+            assert "field" in flag
+            assert flag["severity"] in {"high", "medium", "low"}
+
 
 class TestPreprocessorAgent:
     """Tests for the PreprocessorAgent class."""

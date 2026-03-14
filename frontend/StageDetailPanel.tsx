@@ -2,17 +2,19 @@ import { useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { X } from "lucide-react";
 import type { PipelineStage } from "@/data/pipelineStages";
-import type { DatasetPreviewResponse, DatasetSummary, MetricsResponse, TaskType } from "@/lib/api";
+import type { DataQualityProfile, DatasetColumn, DatasetPreviewResponse, DatasetSummary, MetricsResponse, QualityFlag, TaskType } from "@/lib/api";
 import { getDatasetPreview } from "@/lib/api";
 import FeatureEngineeringDashboard from "./FeatureEngineeringDashboard";
 import EvaluationDashboard from "./EvaluationDashboard";
 import { StageVisualization } from "./StageVisualizations";
+import DatasetSummaryCard from "./DatasetSummary";
 
 interface StageDetailPanelProps {
   stage: PipelineStage | null;
   stageResult: Record<string, unknown> | null;
   lossStageResult?: Record<string, unknown> | null;
   datasetSummary: DatasetSummary | null;
+  datasetColumns?: DatasetColumn[];
   metrics: MetricsResponse | null;
   stageLogs: string[];
   lossStageLogs?: string[];
@@ -27,6 +29,7 @@ const StageDetailPanel = ({
   stageResult,
   lossStageResult,
   datasetSummary,
+  datasetColumns = [],
   metrics,
   stageLogs,
   lossStageLogs,
@@ -215,6 +218,33 @@ const StageDetailPanel = ({
 
                   {stage.id === "training" && buildTrainingComparisonPanel(stageResult)}
 
+                  {stage.id === "analysis" && (
+                    <div className="space-y-2">
+                      <h3 className="text-sm font-medium text-accent">Dataset overview</h3>
+                      <DatasetSummaryCard
+                        summary={datasetSummary}
+                        columns={datasetColumns}
+                        targetColumn={targetColumn}
+                      />
+                    </div>
+                  )}
+
+                  {stage.id === "analysis" && buildAnalysisQualityPanel(stageResult)}
+
+                  {stage.id === "analysis" && (stageResult?.correlations as Record<string, unknown> | undefined) && (
+                    <div className="space-y-2">
+                      <h3 className="text-sm font-medium text-accent">Correlation heatmap</h3>
+                      <div className="glass-card p-4">
+                        <StageVisualization
+                          stage={stage}
+                          stageResult={stageResult}
+                          datasetSummary={datasetSummary}
+                          metrics={metrics}
+                        />
+                      </div>
+                    </div>
+                  )}
+
                   {isModelSelection && buildModelSelectionPanel(stageResult)}
 
                   {isPreprocessing ? (
@@ -398,7 +428,7 @@ const StageSummaryCard = ({
 const getPanelWidthClass = (stageId: string) => {
   if (stageId === "features") return "max-w-[min(96vw,1200px)]";
   if (stageId === "evaluation") return "max-w-[min(96vw,1240px)]";
-  if (stageId === "model_selection" || stageId === "preprocessing") {
+  if (stageId === "model_selection" || stageId === "preprocessing" || stageId === "analysis") {
     return "max-w-[min(92vw,960px)]";
   }
   return "max-w-lg";
@@ -415,6 +445,7 @@ const buildHighlights = (
       return [
         { label: "Rows", value: String(stageResult?.row_count ?? datasetSummary?.rows ?? "Pending") },
         { label: "Features", value: String(stageResult?.feature_count ?? "Pending") },
+        { label: "Risk level", value: String(stageResult?.risk_level ?? "Pending") },
         {
           label: "Recommendations",
           value: String(((stageResult?.recommendations as string[] | undefined) || []).length || "Pending"),
@@ -502,6 +533,104 @@ const buildHighlights = (
     default:
       return [];
   }
+};
+
+const SEVERITY_STYLES: Record<string, string> = {
+  high: "bg-red-500/15 text-red-400 border border-red-500/30",
+  medium: "bg-yellow-500/15 text-yellow-400 border border-yellow-500/30",
+  low: "bg-blue-500/15 text-blue-400 border border-blue-500/30",
+};
+
+const buildAnalysisQualityPanel = (stageResult: Record<string, unknown> | null) => {
+  if (!stageResult) return null;
+
+  const dq = (stageResult.data_quality as DataQualityProfile | undefined) || {};
+  const qualityFlags = (stageResult.quality_flags as QualityFlag[] | undefined) || [];
+  const analysisScore = String(stageResult.analysis_summary || "").trim();
+  const recommendations = (stageResult.recommendations as string[] | undefined) || [];
+
+  const kpis = [
+    {
+      label: "Missing rows",
+      value: dq.missing_rows_pct != null ? `${dq.missing_rows_pct.toFixed(1)}%` : "—",
+    },
+    {
+      label: "Duplicate rows",
+      value: dq.duplicate_rows != null ? `${dq.duplicate_rows.toLocaleString()} (${(dq.duplicate_pct ?? 0).toFixed(1)}%)` : "—",
+    },
+    {
+      label: "Outlier columns",
+      value: dq.outlier_columns_count != null ? String(dq.outlier_columns_count) : "—",
+    },
+    {
+      label: "High cardinality",
+      value: dq.high_cardinality_count != null ? String(dq.high_cardinality_count) : "—",
+    },
+    {
+      label: "Missing columns",
+      value: dq.missing_columns_count != null ? String(dq.missing_columns_count) : "—",
+    },
+    {
+      label: "Leakage signals",
+      value: dq.leakage_risk_columns != null ? String(dq.leakage_risk_columns.length) : "—",
+    },
+  ];
+
+  return (
+    <div className="space-y-4">
+      <div className="space-y-2">
+        <h3 className="text-sm font-medium text-accent">Data quality metrics</h3>
+        <div className="grid grid-cols-3 gap-2">
+          {kpis.map((kpi) => (
+            <div key={kpi.label} className="glass-card space-y-1 p-3">
+              <p className="text-[10px] text-muted-foreground">{kpi.label}</p>
+              <p className="font-mono text-sm text-foreground">{kpi.value}</p>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {qualityFlags.length > 0 && (
+        <div className="space-y-2">
+          <h3 className="text-sm font-medium text-accent">Quality flags</h3>
+          <div className="space-y-2">
+            {qualityFlags.map((flag, index) => (
+              <div
+                key={`${flag.field}-${index}`}
+                className={`flex items-start gap-3 rounded-lg px-3 py-2 text-xs ${SEVERITY_STYLES[flag.severity] ?? "bg-secondary/50 text-foreground"}`}
+              >
+                <span className="mt-px shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide opacity-80">
+                  {flag.severity}
+                </span>
+                <span className="leading-relaxed">{flag.message}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {analysisScore && (
+        <div className="space-y-2">
+          <h3 className="text-sm font-medium text-accent">LLM analysis summary</h3>
+          <div className="glass-card p-4 text-sm text-secondary-foreground">{analysisScore}</div>
+        </div>
+      )}
+
+      {recommendations.length > 0 && (
+        <div className="space-y-2">
+          <h3 className="text-sm font-medium text-accent">Recommendations</h3>
+          <div className="glass-card space-y-2 p-4">
+            {recommendations.map((rec, index) => (
+              <div key={`rec-${index}`} className="flex items-start gap-2 text-sm text-secondary-foreground">
+                <span className="mt-0.5 shrink-0 text-accent">•</span>
+                <span>{rec}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
 };
 
 const MODEL_EXPLANATIONS: Record<string, string> = {

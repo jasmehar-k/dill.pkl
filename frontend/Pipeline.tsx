@@ -20,7 +20,6 @@ import {
   type TaskType,
 } from "@/lib/api";
 import ChatBot from "./ChatBot";
-import DatasetSummaryCard from "./DatasetSummary";
 import DatasetUpload from "./DatasetUpload";
 import NeuralBackground from "./NeuralBackground";
 import PipelineConnector from "./PipelineConnector";
@@ -369,12 +368,6 @@ const Pipeline = () => {
           onAutoDetect={handleAutoDetectTarget}
         />
 
-        <DatasetSummaryCard
-          summary={datasetSummary}
-          columns={datasetColumns}
-          targetColumn={selectedColumn}
-        />
-
         <div className="flex items-start justify-center overflow-x-auto pb-4 pt-2">
           {VISIBLE_STAGES.map((stage, index) => (
             <div key={stage.id} className="flex items-start">
@@ -425,6 +418,7 @@ const Pipeline = () => {
           stageResult={selectedStage ? stageResults[selectedStage.id] || null : null}
           lossStageResult={stageResults.loss || null}
           datasetSummary={datasetSummary}
+          datasetColumns={datasetColumns}
           metrics={metrics}
           stageLogs={selectedStage ? stageLogs[selectedStage.id] || [] : []}
           lossStageLogs={stageLogs.loss || []}
