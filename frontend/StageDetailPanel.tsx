@@ -1,7 +1,9 @@
+import { useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { X } from "lucide-react";
 import type { PipelineStage } from "@/data/pipelineStages";
 import type { DatasetSummary, MetricsResponse } from "@/lib/api";
+import { getDatasetPreview } from "@/lib/api";
 import { StageVisualization } from "./StageVisualizations";
 
 interface StageDetailPanelProps {
@@ -21,7 +23,26 @@ const StageDetailPanel = ({
   stageLogs,
   onClose,
 }: StageDetailPanelProps) => {
+  const [datasetPreview, setDatasetPreview] = useState<{ rows: Array<Record<string, unknown>>; columns: string[] } | null>(null);
+  const [isLoadingPreview, setIsLoadingPreview] = useState(false);
   const highlights = stage ? buildHighlights(stage.id, stageResult, datasetSummary, metrics) : [];
+  const isPreprocessing = stage?.id === "preprocessing";
+  const aboutText = useMemo(() => {
+    if (!stage) return "";
+    if (isPreprocessing) {
+      return "This step prepares your dataset so it can be used by machine learning models. Missing values are filled in, categories are converted into numbers, numeric values are scaled, and the data is split into training and testing sets to evaluate performance.";
+    }
+    return stage.details;
+  }, [isPreprocessing, stage]);
+
+  useEffect(() => {
+    if (!isPreprocessing || !stage) return;
+    setIsLoadingPreview(true);
+    void getDatasetPreview(5)
+      .then(setDatasetPreview)
+      .catch(() => setDatasetPreview(null))
+      .finally(() => setIsLoadingPreview(false));
+  }, [isPreprocessing, stage]);
 
   return (
     <AnimatePresence>
@@ -60,7 +81,7 @@ const StageDetailPanel = ({
 
               <div className="space-y-2">
                 <h3 className="text-sm font-medium text-accent">About this stage</h3>
-                <p className="text-sm leading-relaxed text-secondary-foreground">{stage.details}</p>
+                <p className="text-sm leading-relaxed text-secondary-foreground">{aboutText}</p>
               </div>
 
               {highlights.length > 0 && (
@@ -78,7 +99,7 @@ const StageDetailPanel = ({
               )}
 
               <div className="space-y-2">
-                <h3 className="text-sm font-medium text-accent">Visualization</h3>
+                <h3 className="text-sm font-medium text-accent">{isPreprocessing ? "Dataset overview" : "Visualization"}</h3>
                 <div className="glass-card p-4">
                   <StageVisualization
                     stage={stage}
@@ -90,35 +111,62 @@ const StageDetailPanel = ({
               </div>
 
               <div className="space-y-2">
-                <h3 className="text-sm font-medium text-accent">Stage logs</h3>
-                <div className="glass-card max-h-48 space-y-2 overflow-y-auto p-4 font-mono text-[11px] scrollbar-thin">
-                  {stageLogs.length > 0 ? (
-                    stageLogs.map((log, index) => (
-                      <p
-                        key={`${stage.id}-${index}`}
-                        className={`whitespace-pre-wrap leading-relaxed ${
-                          log.includes(" summary:")
-                            ? "text-accent"
-                            : log.includes(" overall:")
-                              ? "text-primary"
-                              : "text-foreground/75"
-                        }`}
-                      >
-                        {log}
-                      </p>
-                    ))
+                <h3 className="text-sm font-medium text-accent">
+                  {isPreprocessing ? "How we prepared your data" : "Stage logs"}
+                </h3>
+                <div className="glass-card space-y-2 p-4 text-sm leading-relaxed text-secondary-foreground">
+                  {isPreprocessing ? (
+                    <PreprocessExplanation stageResult={stageResult} datasetSummary={datasetSummary} />
                   ) : (
-                    <p className="text-muted-foreground">No logs recorded for this stage yet.</p>
+                    <div className="max-h-48 space-y-2 overflow-y-auto font-mono text-[11px] scrollbar-thin">
+                      {stageLogs.length > 0 ? (
+                        stageLogs.map((log, index) => (
+                          <p key={`${stage.id}-${index}`} className="whitespace-pre-wrap leading-relaxed text-foreground/75">
+                            {log}
+                          </p>
+                        ))
+                      ) : (
+                        <p className="text-muted-foreground">No logs recorded for this stage yet.</p>
+                      )}
+                    </div>
                   )}
                 </div>
               </div>
 
-              <div className="space-y-2">
-                <h3 className="text-sm font-medium text-accent">Code</h3>
-                <pre className="glass-card overflow-x-auto whitespace-pre-wrap p-4 font-mono text-[12px] leading-relaxed text-foreground/80">
-                  {stage.codeSnippet}
-                </pre>
-              </div>
+              {isPreprocessing && (
+                <div className="space-y-2">
+                  <h3 className="text-sm font-medium text-accent">Dataset preview</h3>
+                  <div className="glass-card overflow-auto p-3">
+                    {isLoadingPreview && <p className="text-muted-foreground text-sm">Loading sample rows...</p>}
+                    {!isLoadingPreview && datasetPreview && datasetPreview.rows.length > 0 ? (
+                      <table className="min-w-full text-left text-[11px]">
+                        <thead className="text-muted-foreground">
+                          <tr>
+                            {datasetPreview.columns.map((col) => (
+                              <th key={col} className="px-2 py-1 font-medium">
+                                {col}
+                              </th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {datasetPreview.rows.map((row, idx) => (
+                            <tr key={idx} className="border-b border-border/50">
+                              {datasetPreview.columns.map((col) => (
+                                <td key={col} className="px-2 py-1">
+                                  {String(row[col] ?? "")}
+                                </td>
+                              ))}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    ) : (
+                      !isLoadingPreview && <p className="text-muted-foreground text-sm">Preview not available.</p>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
           </motion.div>
         </>
@@ -145,9 +193,9 @@ const buildHighlights = (
       ];
     case "preprocessing":
       return [
-        { label: "Train size", value: String(stageResult?.train_size ?? "Pending") },
-        { label: "Test size", value: String(stageResult?.test_size ?? "Pending") },
-        { label: "Features", value: String(stageResult?.feature_count ?? "Pending") },
+        { label: "Training data", value: `${stageResult?.train_size ?? "Pending"} rows` },
+        { label: "Evaluation data", value: `${stageResult?.test_size ?? "Pending"} rows` },
+        { label: "Model features", value: `${stageResult?.feature_count ?? "Pending"} columns used` },
       ];
     case "features":
       return [
@@ -216,6 +264,48 @@ const formatMetric = (value: number | null | undefined, asPercent = false) => {
 const formatLast = (values?: number[]) => {
   if (!values || values.length === 0) return "Pending";
   return values[values.length - 1].toFixed(3);
+};
+
+const PreprocessExplanation = ({
+  stageResult,
+  datasetSummary,
+}: {
+  stageResult: Record<string, unknown> | null;
+  datasetSummary: DatasetSummary | null;
+}) => {
+  const summary = (stageResult?.explanation as string | undefined) || "We filled missing values, simplified categories, and prepared numeric columns so the model can learn reliably.";
+  const train = stageResult?.train_size as number | undefined;
+  const test = stageResult?.test_size as number | undefined;
+  const total = datasetSummary?.rows;
+  const integrityOK = typeof train === "number" && typeof test === "number" && typeof total === "number" && train + test === total;
+
+  return (
+    <div className="space-y-2">
+      <p className="text-foreground">{summary}</p>
+      <ul className="ml-4 list-disc space-y-1 text-sm text-secondary-foreground">
+        <li>Any missing values were filled in automatically.</li>
+        <li>Columns with categories were converted into numbers so the model can use them.</li>
+        <li>Numeric features were standardized so large ranges don&apos;t dominate the model.</li>
+      </ul>
+      {(train || test) && (
+        <p className="text-sm text-secondary-foreground">
+          Finally, the data was split into {train ? train.toLocaleString() : "?"} rows for training and{" "}
+          {test ? test.toLocaleString() : "?"} rows to test how well the model performs on new data.
+        </p>
+      )}
+      {integrityOK && <p className="text-sm font-medium text-primary">✔ Dataset integrity preserved (0 rows dropped)</p>}
+      <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+        {["Raw data", "Clean missing values", "Convert categories", "Prepare numeric columns", "Train/Test split"].map(
+          (step, index, arr) => (
+            <div key={step} className="flex items-center gap-1">
+              <span className="rounded bg-secondary px-2 py-1">{step}</span>
+              {index < arr.length - 1 && <span className="text-muted-foreground">→</span>}
+            </div>
+          ),
+        )}
+      </div>
+    </div>
+  );
 };
 
 export default StageDetailPanel;

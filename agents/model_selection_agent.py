@@ -8,7 +8,7 @@ This agent recommends machine learning models based on:
 """
 
 import logging
-from typing import Any
+from typing import Any, Optional
 
 import pandas as pd
 from sklearn.ensemble import (
@@ -259,7 +259,7 @@ class ModelSelectionAgent(BaseAgent):
         default_reasoning: str,
         target_column: str,
         selected_features: list[str],
-    ) -> dict[str, Any] | None:
+    ) -> Optional[dict[str, Any]]:
         """Use an LLM to refine model choice within deterministic guardrails."""
         payload = {
             "task_type": task_type,
