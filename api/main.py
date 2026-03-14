@@ -115,7 +115,7 @@ class ChatSelectionContext(BaseModel):
 
 class ChatRequest(BaseModel):
     question: str
-    history: list[ChatMessage] = Field(default_factory=list)
+    history: list[ChatMessage] = []
     selection_context: Optional[ChatSelectionContext] = None
 
 
