@@ -375,6 +375,15 @@ async def run_pipeline_stage(stage: str, config: PipelineConfig):
             explanation_result = await explanation_agent.run(
                 training,
                 evaluation,
+                pipeline_context={
+                    "dataset": pipeline_state.dataset_filename,
+                    "target_column": pipeline_state.target_column,
+                    "task_type": config.task_type,
+                    "model_selection": pipeline_state.stage_results.get("model_selection", {}),
+                    "training": training,
+                    "evaluation": evaluation,
+                    "deployment": result,
+                },
             )
             pipeline_state.stage_results["explanation"] = explanation_result
             add_agent_summary_logs("results", explanation_result)
@@ -691,6 +700,15 @@ async def get_metrics():
         "performance_summary": evaluation.get("performance_summary"),
         "confusion_matrix": evaluation.get("confusion_matrix", []),
     }
+
+
+@app.get("/api/results/explanation")
+async def get_explanation():
+    """Get the pipeline explanation summary."""
+    explanation = pipeline_state.stage_results.get("explanation")
+    if not explanation:
+        raise HTTPException(status_code=404, detail="No explanation available")
+    return explanation
 
 
 if __name__ == "__main__":

@@ -4,6 +4,7 @@ import { stages, type PipelineStage, type StageStatus } from "@/data/pipelineSta
 import {
   getDatasetColumns,
   getDatasetSummary,
+  getExplanation,
   getMetrics,
   getPipelineLogs,
   getPipelineStatus,
@@ -50,6 +51,7 @@ const Pipeline = () => {
   const [stageLogs, setStageLogs] = useState<Record<string, string[]>>(createEmptyLogs);
   const [stageResults, setStageResults] = useState<Record<string, Record<string, unknown>>>({});
   const [metrics, setMetrics] = useState<MetricsResponse | null>(null);
+  const [explanation, setExplanation] = useState<Record<string, unknown> | null>(null);
   const [selectedColumn, setSelectedColumnState] = useState<string | null>(null);
   const [taskType, setTaskType] = useState<TaskType>("classification");
   const [isUploading, setIsUploading] = useState(false);
@@ -106,6 +108,7 @@ const Pipeline = () => {
       setStageLogs(createEmptyLogs());
       setStageResults({});
       setMetrics(null);
+      setExplanation(null);
       return;
     }
 
@@ -129,6 +132,16 @@ const Pipeline = () => {
     } else {
       setMetrics(null);
     }
+
+    if (normalizedStages.results === "completed") {
+      try {
+        setExplanation(await getExplanation());
+      } catch {
+        setExplanation(null);
+      }
+    } else {
+      setExplanation(null);
+    }
   }, [refreshLogs, syncStageResults]);
 
   useEffect(() => {
@@ -147,6 +160,7 @@ const Pipeline = () => {
     try {
       await uploadDataset(file);
       setMetrics(null);
+      setExplanation(null);
       setStageResults({});
       setStageLogs(createEmptyLogs());
       await refreshPipelineData();
@@ -196,6 +210,7 @@ const Pipeline = () => {
     setPipelineStatus(createInitialStatuses());
     setStageResults({});
     setMetrics(null);
+    setExplanation(null);
     setStageLogs(createEmptyLogs());
 
     for (let index = 0; index < STAGE_ORDER.length; index += 1) {
@@ -227,6 +242,13 @@ const Pipeline = () => {
             setMetrics(await getMetrics());
           } catch {
             setMetrics(null);
+          }
+        }
+        if (stageId === "results") {
+          try {
+            setExplanation(await getExplanation());
+          } catch {
+            setExplanation(null);
           }
         }
       } catch (err) {
@@ -350,6 +372,7 @@ const Pipeline = () => {
           isComplete={isComplete}
           metrics={metrics}
           results={stageResults.results || null}
+          explanation={explanation}
         />
 
         <StageDetailPanel
@@ -358,6 +381,7 @@ const Pipeline = () => {
           datasetSummary={datasetSummary}
           metrics={metrics}
           stageLogs={selectedStage ? stageLogs[selectedStage.id] || [] : []}
+          explanation={explanation}
           onClose={() => setSelectedStage(null)}
         />
 

@@ -12,6 +12,7 @@ interface StageDetailPanelProps {
   datasetSummary: DatasetSummary | null;
   metrics: MetricsResponse | null;
   stageLogs: string[];
+  explanation?: Record<string, unknown> | null;
   onClose: () => void;
 }
 
@@ -21,6 +22,7 @@ const StageDetailPanel = ({
   datasetSummary,
   metrics,
   stageLogs,
+  explanation,
   onClose,
 }: StageDetailPanelProps) => {
   const [datasetPreview, setDatasetPreview] = useState<{ rows: Array<Record<string, unknown>>; columns: string[] } | null>(null);
@@ -28,6 +30,24 @@ const StageDetailPanel = ({
   const highlights = stage ? buildHighlights(stage.id, stageResult, datasetSummary, metrics) : [];
   const modelPanel = stage?.id === "model_selection" ? buildModelSelectionPanel(stageResult) : null;
   const isPreprocessing = stage?.id === "preprocessing";
+  const explanationSummary = explanation?.summary ? String(explanation.summary) : "";
+  const pipelineSummary = explanation?.pipeline_summary ? String(explanation.pipeline_summary) : "";
+  const explanationBullets = Array.isArray(explanation?.explanations)
+    ? (explanation?.explanations as string[]).map((item) => String(item)).filter(Boolean)
+    : [];
+  const summaryLines = explanationSummary
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .filter((line) => line.toLowerCase() !== "model explanation summary:");
+  const summaryBullets = summaryLines.filter((line) => /^\d+\./.test(line)).map((line) => line.replace(/^\d+\.\s*/, ""));
+  const summaryText = summaryLines.filter((line) => !/^\d+\./.test(line) && !line.toLowerCase().startsWith("final decision:"));
+  const summaryDecision = summaryLines.find((line) => line.toLowerCase().startsWith("final decision:"));
+  const pipelineLines = pipelineSummary
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => line.replace(/^-+\s*/, ""));
   const aboutText = useMemo(() => {
     if (!stage) return "";
     if (isPreprocessing) {
@@ -78,6 +98,58 @@ const StageDetailPanel = ({
                 <p className="text-sm leading-relaxed text-secondary-foreground">{aboutText}</p>
               </div>
 
+              {stage.id === "results" && (explanationSummary || pipelineSummary || explanationBullets.length > 0) && (
+                <div className="space-y-3">
+                  <h3 className="text-sm font-medium text-accent">Pipeline recap</h3>
+                  {(summaryText.length > 0 || summaryBullets.length > 0 || summaryDecision) && (
+                    <div className="glass-card space-y-2 p-4 text-[11px] text-secondary-foreground">
+                      {summaryText.map((line) => (
+                        <p key={line} className="text-secondary-foreground">
+                          {line}
+                        </p>
+                      ))}
+                      {summaryBullets.length > 0 && (
+                        <div className="space-y-1">
+                          {summaryBullets.map((item, index) => (
+                            <div key={`${item}-${index}`} className="flex items-start gap-2">
+                              <span className="text-accent">•</span>
+                              <span>{item}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {summaryDecision && (
+                        <p className="text-[11px] font-semibold uppercase tracking-wide text-primary">
+                          {summaryDecision}
+                        </p>
+                      )}
+                    </div>
+                  )}
+
+                  {explanationBullets.length > 0 && (
+                    <div className="glass-card space-y-1 p-4 text-[11px] text-secondary-foreground">
+                      {explanationBullets.map((item, index) => (
+                        <div key={`${item}-${index}`} className="flex items-start gap-2">
+                          <span className="text-accent">•</span>
+                          <span>{item}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {pipelineLines.length > 0 && (
+                    <div className="glass-card space-y-1 p-4 text-[11px] text-secondary-foreground">
+                      {pipelineLines.map((line, index) => (
+                        <div key={`${line}-${index}`} className="flex items-start gap-2">
+                          <span className="text-accent">•</span>
+                          <span>{line}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
               {highlights.length > 0 && (
                 <div className="space-y-3">
                   <h3 className="text-sm font-medium text-accent">Stage highlights</h3>
@@ -96,53 +168,59 @@ const StageDetailPanel = ({
 
               {stage.id !== "model_selection" && (
                 <>
-                  <div className="space-y-2">
-                    <h3 className="text-sm font-medium text-accent">
-                      {isPreprocessing ? "Dataset overview" : "Visualization"}
-                    </h3>
-                    <div className="glass-card p-4">
-                      <StageVisualization
-                        stage={stage}
-                        stageResult={stageResult}
-                        datasetSummary={datasetSummary}
-                        metrics={metrics}
-                      />
+                  {stage.id !== "results" && (
+                    <div className="space-y-2">
+                      <h3 className="text-sm font-medium text-accent">
+                        {isPreprocessing ? "Dataset overview" : "Visualization"}
+                      </h3>
+                      <div className="glass-card p-4">
+                        <StageVisualization
+                          stage={stage}
+                          stageResult={stageResult}
+                          datasetSummary={datasetSummary}
+                          metrics={metrics}
+                        />
+                      </div>
                     </div>
-                  </div>
+                  )}
 
                   <div className="space-y-2">
-                    <h3 className="text-sm font-medium text-accent">
-                      {isPreprocessing ? "How we prepared your data" : "Stage logs"}
-                    </h3>
-                    <div className="glass-card space-y-2 p-4 text-sm leading-relaxed text-secondary-foreground">
-                      {isPreprocessing ? (
-                        <PreprocessExplanation stageResult={stageResult} datasetSummary={datasetSummary} />
-                      ) : (
-                        <div className="max-h-48 space-y-2 overflow-y-auto font-mono text-[11px] scrollbar-thin">
-                          {stageLogs.length > 0 ? (
-                            stageLogs.map((log, index) => (
-                              <p
-                                key={`${stage.id}-${index}`}
-                                className={`whitespace-pre-wrap leading-relaxed ${
-                                  log.includes(" summary:")
-                                    ? "text-accent"
-                                    : log.includes(" overall:")
-                                      ? "text-primary"
-                                      : "text-foreground/75"
-                                }`}
-                              >
-                                {log}
-                              </p>
-                            ))
-                          ) : (
-                            <p className="text-muted-foreground">No logs recorded for this stage yet.</p>
-                          )}
-                        </div>
-                      )}
-                    </div>
+                    {stage.id !== "results" && (
+                      <h3 className="text-sm font-medium text-accent">
+                        {isPreprocessing ? "How we prepared your data" : "Stage logs"}
+                      </h3>
+                    )}
+                    {stage.id !== "results" && (
+                      <div className="glass-card space-y-2 p-4 text-sm leading-relaxed text-secondary-foreground">
+                        {isPreprocessing ? (
+                          <PreprocessExplanation stageResult={stageResult} datasetSummary={datasetSummary} />
+                        ) : (
+                          <div className="max-h-48 space-y-2 overflow-y-auto font-mono text-[11px] scrollbar-thin">
+                            {stageLogs.length > 0 ? (
+                              stageLogs.map((log, index) => (
+                                <p
+                                  key={`${stage.id}-${index}`}
+                                  className={`whitespace-pre-wrap leading-relaxed ${
+                                    log.includes(" summary:")
+                                      ? "text-accent"
+                                      : log.includes(" overall:")
+                                        ? "text-primary"
+                                        : "text-foreground/75"
+                                  }`}
+                                >
+                                  {log}
+                                </p>
+                              ))
+                            ) : (
+                              <p className="text-muted-foreground">No logs recorded for this stage yet.</p>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
 
-                  {!isPreprocessing && (
+                  {!isPreprocessing && stage.id !== "results" && (
                     <div className="space-y-2">
                       <h3 className="text-sm font-medium text-accent">Code</h3>
                       <pre className="glass-card overflow-x-auto whitespace-pre-wrap p-4 font-mono text-[12px] leading-relaxed text-foreground/80">
