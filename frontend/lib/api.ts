@@ -249,6 +249,6 @@ export function queryChat(
   });
 }
 
-export function getDownloadUrl(kind: "model" | "logs"): string {
+export function getDownloadUrl(kind: "model" | "logs" | "deployment-package"): string {
   return `${API_BASE_URL}/api/results/download/${kind}`;
 }

@@ -662,7 +662,7 @@ class TestDeploymentAgent:
 
     @pytest.mark.asyncio
     async def test_deployment_saves_model(self) -> None:
-        """Test that agent saves the model."""
+        """Test that agent saves the model and returns model_path."""
         from sklearn.ensemble import RandomForestClassifier
 
         model = RandomForestClassifier(n_estimators=10, random_state=42)
@@ -684,3 +684,161 @@ class TestDeploymentAgent:
 
         assert "model_path" in result
         assert result["deployment_success"] is True
+
+    @pytest.mark.asyncio
+    async def test_deployment_builds_package_zip(self) -> None:
+        """Test that the deployment package zip is created with required files."""
+        import zipfile
+        from sklearn.ensemble import RandomForestClassifier
+        import pandas as pd
+
+        model = RandomForestClassifier(n_estimators=10, random_state=42)
+        training_result = {
+            "model": model,
+            "model_name": "RandomForest",
+            "feature_names": ["age", "income", "region_A", "region_B"],
+        }
+        evaluation_result = {
+            "task_type": "classification",
+            "accuracy": 0.92,
+            "f1": 0.88,
+            "deployment_decision": "deploy",
+        }
+        analysis_result = {
+            "numeric_columns": ["age", "income"],
+            "categorical_columns": ["region"],
+        }
+        preprocessing_result = {
+            "numeric_columns": ["age", "income"],
+            "categorical_columns": ["region"],
+            "encoding_mapping": {"region": ["A", "B"]},
+        }
+        raw_df = pd.DataFrame({
+            "age": [25, 35, 45, 55],
+            "income": [30000.0, 50000.0, 70000.0, 90000.0],
+            "region": ["A", "B", "A", "B"],
+            "target": [0, 1, 0, 1],
+        })
+
+        agent = DeploymentAgent()
+        result = await agent.execute(
+            training_result=training_result,
+            evaluation_result=evaluation_result,
+            pipeline_id="test_pkg_pipeline",
+            analysis_result=analysis_result,
+            preprocessing_result=preprocessing_result,
+            raw_dataset=raw_df,
+            target_column="target",
+        )
+
+        assert result["package_ready"] is True
+        assert "package_path" in result
+
+        zip_path = result["package_path"]
+        assert Path(zip_path).exists(), "Package zip file should exist"
+
+        required_files = {"app.py", "schema.json", "model.pkl", "requirements.txt", "Dockerfile", "docker-compose.yml", "README.md"}
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            actual_names = set(zf.namelist())
+        assert required_files.issubset(actual_names), f"Missing: {required_files - actual_names}"
+
+    @pytest.mark.asyncio
+    async def test_deployment_schema_contains_column_info(self) -> None:
+        """Test that schema.json in the package has the expected structure."""
+        import json
+        import zipfile
+        from sklearn.ensemble import RandomForestClassifier
+        import pandas as pd
+
+        model = RandomForestClassifier(n_estimators=10, random_state=42)
+        training_result = {"model": model, "model_name": "RF"}
+        evaluation_result = {"task_type": "classification", "accuracy": 0.9, "deployment_decision": "deploy"}
+        preprocessing_result = {
+            "numeric_columns": ["age", "income"],
+            "categorical_columns": ["region"],
+            "encoding_mapping": {"region": ["A", "B"]},
+        }
+        raw_df = pd.DataFrame({
+            "age": [20, 30, 40],
+            "income": [20000.0, 40000.0, 60000.0],
+            "region": ["A", "B", "A"],
+            "label": [0, 1, 0],
+        })
+
+        agent = DeploymentAgent()
+        result = await agent.execute(
+            training_result=training_result,
+            evaluation_result=evaluation_result,
+            pipeline_id="test_schema_pipeline",
+            preprocessing_result=preprocessing_result,
+            raw_dataset=raw_df,
+            target_column="label",
+        )
+
+        with zipfile.ZipFile(result["package_path"], "r") as zf:
+            schema = json.loads(zf.read("schema.json"))
+
+        assert "required_columns" in schema
+        assert "numeric_columns" in schema
+        assert "categorical_columns" in schema
+        assert "column_types" in schema
+        assert "column_ranges" in schema
+        assert "allowed_categories" in schema
+        assert "train_medians" in schema
+        assert "feature_order" in schema
+
+        # Numeric columns must have range entries
+        assert "age" in schema["column_ranges"]
+        assert "min" in schema["column_ranges"]["age"]
+        assert "max" in schema["column_ranges"]["age"]
+
+        # Categorical columns must have allowed_categories
+        assert "region" in schema["allowed_categories"]
+        assert set(schema["allowed_categories"]["region"]) == {"A", "B"}
+
+    @pytest.mark.asyncio
+    async def test_deployment_app_py_contains_validation_logic(self) -> None:
+        """Test that the generated app.py contains schema-aware validation."""
+        from sklearn.ensemble import RandomForestClassifier
+
+        model = RandomForestClassifier(n_estimators=10, random_state=42)
+        training_result = {"model": model, "model_name": "RF"}
+        evaluation_result = {"task_type": "classification", "accuracy": 0.9, "deployment_decision": "deploy"}
+
+        agent = DeploymentAgent()
+        result = await agent.execute(
+            training_result=training_result,
+            evaluation_result=evaluation_result,
+            pipeline_id="test_apppy_pipeline",
+        )
+
+        import zipfile
+        with zipfile.ZipFile(result["package_path"], "r") as zf:
+            app_source = zf.read("app.py").decode()
+
+        assert "validate_input" in app_source
+        assert "validation_errors" in app_source
+        assert "/predict" in app_source
+        assert "preprocess" in app_source
+
+    @pytest.mark.asyncio
+    async def test_deployment_requirements_are_pinned(self) -> None:
+        """Test that requirements.txt contains pinned version specifiers."""
+        from sklearn.ensemble import RandomForestClassifier
+
+        model = RandomForestClassifier(n_estimators=10, random_state=42)
+        agent = DeploymentAgent()
+        result = await agent.execute(
+            training_result={"model": model, "model_name": "RF"},
+            evaluation_result={"task_type": "classification", "accuracy": 0.9, "deployment_decision": "deploy"},
+            pipeline_id="test_reqs_pipeline",
+        )
+
+        import zipfile
+        with zipfile.ZipFile(result["package_path"], "r") as zf:
+            reqs = zf.read("requirements.txt").decode()
+
+        # At least some lines should have version pins from runtime
+        pinned = [line for line in reqs.splitlines() if "==" in line]
+        assert len(pinned) > 0, "At least some packages should have pinned versions"
+
