@@ -5,6 +5,9 @@ for consistent error handling and reporting.
 """
 
 
+from typing import Optional, Dict
+
+
 class AutoMLError(Exception):
     """Base exception for all AutoML errors.
 
@@ -12,7 +15,7 @@ class AutoMLError(Exception):
     exceptions inherit.
     """
 
-    def __init__(self, message: str, details: dict | None = None) -> None:
+    def __init__(self, message: str, details: Optional[Dict] = None) -> None:
         """Initialize the exception.
 
         Args:
@@ -33,8 +36,8 @@ class AgentExecutionError(AutoMLError):
     def __init__(
         self,
         message: str,
-        agent_name: str | None = None,
-        details: dict | None = None,
+        agent_name: Optional[str] = None,
+        details: Optional[Dict] = None,
     ) -> None:
         """Initialize the exception.
 
@@ -57,8 +60,8 @@ class ConfigurationError(AutoMLError):
     def __init__(
         self,
         message: str,
-        config_key: str | None = None,
-        details: dict | None = None,
+        config_key: Optional[str] = None,
+        details: Optional[Dict] = None,
     ) -> None:
         """Initialize the exception.
 
@@ -89,8 +92,8 @@ class PipelineError(AutoMLError):
     def __init__(
         self,
         message: str,
-        failed_at_stage: str | None = None,
-        details: dict | None = None,
+        failed_at_stage: Optional[str] = None,
+        details: Optional[Dict] = None,
     ) -> None:
         """Initialize the exception.
 
