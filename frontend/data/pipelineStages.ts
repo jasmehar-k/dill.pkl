@@ -1,0 +1,170 @@
+export type StageStatus = "waiting" | "running" | "completed";
+
+export interface PipelineStage {
+  id: string;
+  label: string;
+  icon: string;
+  description: string;
+  details: string;
+  tooltipPoints: string[];
+  vizType: "heatmap" | "table" | "barChart" | "lossCurve" | "confusionMatrix" | "metrics";
+  codeSnippet: string;
+}
+
+export const stages: PipelineStage[] = [
+  {
+    id: "analysis",
+    label: "Analysis",
+    icon: "🔎",
+    description: "Inspect dataset structure, quality, and feature relationships.",
+    details:
+      "The analysis stage profiles the uploaded dataset, scans for missing values and outliers, and highlights correlations that matter for modeling decisions.",
+    tooltipPoints: [
+      "Profiles numerical and categorical columns",
+      "Flags missing values and outliers",
+      "Builds an initial correlation heatmap",
+    ],
+    vizType: "heatmap",
+    codeSnippet: `import pandas as pd
+
+df = pd.read_csv("housing_prices.csv")
+summary = df.describe(include="all")
+missing = df.isna().mean().sort_values(ascending=False)
+correlation = df.corr(numeric_only=True)
+print(summary)
+print(missing.head())`,
+  },
+  {
+    id: "preprocessing",
+    label: "Preprocess",
+    icon: "🧼",
+    description: "Clean raw data and prepare a model-ready feature matrix.",
+    details:
+      "This stage imputes missing values, encodes categorical columns, scales numeric features, and splits the dataset into training and evaluation sets.",
+    tooltipPoints: [
+      "Imputes sparse missing values",
+      "Encodes categorical features",
+      "Scales and splits the dataset",
+    ],
+    vizType: "table",
+    codeSnippet: `from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
+from sklearn.model_selection import train_test_split
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+
+numeric_pipe = Pipeline([
+    ("imputer", SimpleImputer(strategy="median")),
+    ("scaler", StandardScaler()),
+])`,
+  },
+  {
+    id: "features",
+    label: "Features",
+    icon: "🧠",
+    description: "Select and engineer the features that best explain the target.",
+    details:
+      "Feature engineering reduces noise, surfaces strong predictors, and creates useful interactions that make the downstream model more expressive.",
+    tooltipPoints: [
+      "Ranks candidate predictors",
+      "Drops weak or redundant columns",
+      "Creates a small set of interaction features",
+    ],
+    vizType: "barChart",
+    codeSnippet: `from sklearn.feature_selection import SelectKBest, f_regression
+
+selector = SelectKBest(score_func=f_regression, k=10)
+X_selected = selector.fit_transform(X_train, y_train)
+
+feature_scores = selector.scores_
+top_features = feature_scores.argsort()[-10:]`,
+  },
+  {
+    id: "training",
+    label: "Training",
+    icon: "⚙️",
+    description: "Fit the model on the prepared training data.",
+    details:
+      "The training stage initializes the estimator, learns patterns from the training split, and tracks loss as the model converges.",
+    tooltipPoints: [
+      "Initializes the baseline estimator",
+      "Fits on the training split",
+      "Tracks optimization progress over epochs",
+    ],
+    vizType: "lossCurve",
+    codeSnippet: `from sklearn.ensemble import RandomForestClassifier
+
+model = RandomForestClassifier(
+    n_estimators=100,
+    max_depth=None,
+    random_state=42,
+)
+model.fit(X_train, y_train)`,
+  },
+  {
+    id: "loss",
+    label: "Loss",
+    icon: "📉",
+    description: "Compare training and validation loss to spot drift or overfitting.",
+    details:
+      "Loss monitoring gives quick feedback on whether the model is learning generalizable structure or memorizing the training set.",
+    tooltipPoints: [
+      "Plots train and validation curves",
+      "Highlights divergence between the curves",
+      "Helps identify overfitting early",
+    ],
+    vizType: "lossCurve",
+    codeSnippet: `history = {
+    "train_loss": [0.90, 0.65, 0.45, 0.32, 0.22, 0.16, 0.12, 0.09],
+    "val_loss": [0.92, 0.70, 0.52, 0.40, 0.33, 0.29, 0.27, 0.26],
+}
+
+best_epoch = min(range(len(history["val_loss"])), key=history["val_loss"].__getitem__)
+print("best_epoch", best_epoch)`,
+  },
+  {
+    id: "evaluation",
+    label: "Evaluation",
+    icon: "🎯",
+    description: "Measure model quality on held-out data.",
+    details:
+      "Evaluation computes classification metrics and confusion counts so you can judge the model beyond a single headline score.",
+    tooltipPoints: [
+      "Runs predictions on the test split",
+      "Computes precision, recall, and F1",
+      "Surfaces confusion matrix errors",
+    ],
+    vizType: "confusionMatrix",
+    codeSnippet: `from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
+
+y_pred = model.predict(X_test)
+accuracy = accuracy_score(y_test, y_pred)
+matrix = confusion_matrix(y_test, y_pred)
+report = classification_report(y_test, y_pred)
+
+print(accuracy)
+print(matrix)`,
+  },
+  {
+    id: "results",
+    label: "Results",
+    icon: "📦",
+    description: "Package the model artifacts and summary metrics.",
+    details:
+      "The final stage bundles the trained model, configuration, and evaluation outputs into assets that can be downloaded or reused later.",
+    tooltipPoints: [
+      "Persists the trained model",
+      "Exports a metrics report",
+      "Captures the final pipeline configuration",
+    ],
+    vizType: "metrics",
+    codeSnippet: `import joblib
+from pathlib import Path
+
+output_dir = Path("artifacts")
+output_dir.mkdir(exist_ok=True)
+
+joblib.dump(model, output_dir / "model.pkl")
+(output_dir / "metrics.txt").write_text(report)`,
+  },
+];
