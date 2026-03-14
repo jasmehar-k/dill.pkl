@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { motion } from "framer-motion";
 import { stages, type PipelineStage, type StageStatus } from "@/data/pipelineStages";
 import {
@@ -31,17 +31,20 @@ import PredictionTarget from "./PredictionTarget";
 import ResultsPanel from "./ResultsPanel";
 import StageDetailPanel from "./StageDetailPanel";
 
-const STAGE_ORDER = stages.map((stage) => stage.id);
+const HIDDEN_STAGE_IDS = new Set(["loss"]);
+const VISIBLE_STAGES = stages.filter((stage) => !HIDDEN_STAGE_IDS.has(stage.id));
+const VISIBLE_STAGE_ORDER = VISIBLE_STAGES.map((stage) => stage.id);
+const EXECUTION_STAGE_ORDER = stages.map((stage) => stage.id);
 const DEFAULT_CONFIG = {
   test_size: 0.2,
   random_state: 42,
 } satisfies Omit<PipelineConfig, "task_type">;
 
 const createInitialStatuses = (): Record<string, StageStatus> =>
-  Object.fromEntries(STAGE_ORDER.map((stageId) => [stageId, "waiting"])) as Record<string, StageStatus>;
+  Object.fromEntries(EXECUTION_STAGE_ORDER.map((stageId) => [stageId, "waiting"])) as Record<string, StageStatus>;
 
 const createEmptyLogs = (): Record<string, string[]> =>
-  Object.fromEntries(STAGE_ORDER.map((stageId) => [stageId, []]));
+  Object.fromEntries(EXECUTION_STAGE_ORDER.map((stageId) => [stageId, []]));
 
 const Pipeline = () => {
   const [selectedStage, setSelectedStage] = useState<PipelineStage | null>(null);
@@ -60,7 +63,7 @@ const Pipeline = () => {
   const [error, setError] = useState<string | null>(null);
 
   const syncStageResults = useCallback(async (statuses: Record<string, StageStatus>) => {
-    const completedStages = STAGE_ORDER.filter((stageId) => statuses[stageId] === "completed");
+    const completedStages = EXECUTION_STAGE_ORDER.filter((stageId) => statuses[stageId] === "completed");
     if (completedStages.length === 0) {
       setStageResults({});
       return;
@@ -171,6 +174,11 @@ const Pipeline = () => {
     };
   }, [explanation, pipelineStatus.results]);
 
+  const evaluationResponsesReady = useMemo(() => {
+    const evaluationResult = stageResults.evaluation as Record<string, unknown> | undefined;
+    return Boolean(evaluationResult?.llm_insights);
+  }, [stageResults.evaluation]);
+
   const handleUpload = useCallback(async (file: File) => {
     setIsUploading(true);
     setError(null);
@@ -231,8 +239,8 @@ const Pipeline = () => {
     setExplanation(null);
     setStageLogs(createEmptyLogs());
 
-    for (let index = 0; index < STAGE_ORDER.length; index += 1) {
-      const stageId = STAGE_ORDER[index];
+    for (let index = 0; index < EXECUTION_STAGE_ORDER.length; index += 1) {
+      const stageId = EXECUTION_STAGE_ORDER[index];
 
       setPipelineStatus((current) => ({
         ...current,
@@ -285,11 +293,31 @@ const Pipeline = () => {
     setIsRunningPipeline(false);
   }, [datasetSummary, refreshLogs, refreshPipelineData, selectedColumn, taskType]);
 
-  const completedCount = STAGE_ORDER.filter((stageId) => pipelineStatus[stageId] === "completed").length;
-  const progress = (completedCount / stages.length) * 100;
-  const activeStageId = STAGE_ORDER.find((stageId) => pipelineStatus[stageId] === "running") || null;
-  const completedStageIds = STAGE_ORDER.filter((stageId) => pipelineStatus[stageId] === "completed");
-  const isComplete = completedCount === stages.length;
+  const getVisibleStageStatus = useCallback((stageId: string): StageStatus => {
+    if (stageId === "evaluation") {
+      if (pipelineStatus.evaluation === "running" || pipelineStatus.loss === "running") return "running";
+      if (pipelineStatus.evaluation === "completed" && !evaluationResponsesReady) return "running";
+      if (pipelineStatus.evaluation === "completed") return "completed";
+      if (pipelineStatus.evaluation === "failed" || pipelineStatus.loss === "failed") return "failed";
+      return "waiting";
+    }
+    if (stageId === "results") {
+      if (!evaluationResponsesReady && pipelineStatus.evaluation === "completed") {
+        return pipelineStatus.results === "failed" ? "failed" : "waiting";
+      }
+      return pipelineStatus[stageId] || "waiting";
+    }
+    return pipelineStatus[stageId] || "waiting";
+  }, [evaluationResponsesReady, pipelineStatus]);
+
+  const completedCount = VISIBLE_STAGE_ORDER.filter((stageId) => getVisibleStageStatus(stageId) === "completed").length;
+  const progress = (completedCount / VISIBLE_STAGES.length) * 100;
+  const activeStageId =
+    pipelineStatus.evaluation === "completed" && !evaluationResponsesReady
+      ? "evaluation"
+      : EXECUTION_STAGE_ORDER.find((stageId) => pipelineStatus[stageId] === "running") || null;
+  const completedStageIds = VISIBLE_STAGE_ORDER.filter((stageId) => getVisibleStageStatus(stageId) === "completed");
+  const isComplete = completedCount === VISIBLE_STAGES.length;
   const modelName =
     (metrics?.model_name as string | null | undefined) ||
     (stageResults.training?.model_name as string | undefined) ||
@@ -302,7 +330,7 @@ const Pipeline = () => {
       <div className="relative z-10 mx-auto w-full max-w-6xl space-y-5 px-4 py-8">
         <PipelineHeader
           completedCount={completedCount}
-          totalStages={stages.length}
+          totalStages={VISIBLE_STAGES.length}
           progress={progress}
           datasetName={datasetSummary?.filename || null}
           targetColumn={selectedColumn}
@@ -348,18 +376,18 @@ const Pipeline = () => {
         />
 
         <div className="flex items-start justify-center overflow-x-auto pb-4 pt-2">
-          {stages.map((stage, index) => (
+          {VISIBLE_STAGES.map((stage, index) => (
             <div key={stage.id} className="flex items-start">
               <PipelineNode
                 stage={stage}
-                status={pipelineStatus[stage.id] || "waiting"}
+                status={getVisibleStageStatus(stage.id)}
                 index={index}
                 onClick={() => setSelectedStage(stage)}
               />
-              {index < stages.length - 1 && (
+              {index < VISIBLE_STAGES.length - 1 && (
                 <PipelineConnector
-                  completed={pipelineStatus[stage.id] === "completed"}
-                  running={pipelineStatus[stages[index + 1].id] === "running"}
+                  completed={getVisibleStageStatus(stage.id) === "completed"}
+                  running={getVisibleStageStatus(VISIBLE_STAGES[index + 1].id) === "running"}
                 />
               )}
             </div>
@@ -395,9 +423,11 @@ const Pipeline = () => {
         <StageDetailPanel
           stage={selectedStage}
           stageResult={selectedStage ? stageResults[selectedStage.id] || null : null}
+          lossStageResult={stageResults.loss || null}
           datasetSummary={datasetSummary}
           metrics={metrics}
           stageLogs={selectedStage ? stageLogs[selectedStage.id] || [] : []}
+          lossStageLogs={stageLogs.loss || []}
           taskType={taskType}
           targetColumn={selectedColumn}
           explanation={explanation}

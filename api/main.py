@@ -18,6 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 from utils.logger import get_logger
+from utils.evaluation_insights import generate_evaluation_insights
 
 # Ensure outputs directory exists
 OUTPUTS_DIR = Path("outputs")
@@ -97,6 +98,33 @@ class DatasetSummaryResponse(BaseModel):
 class DatasetPreviewResponse(BaseModel):
     rows: list[dict[str, Any]]
     columns: list[str]
+
+
+class DeploymentReasoningResponse(BaseModel):
+    recommendation: str
+    confidence: str
+    reason: str
+    risk_note: str
+    next_step: str
+
+
+class EvaluationInsightsResponse(BaseModel):
+    stage_summary: str
+    about_stage_text: str
+    performance_story: str
+    loss_explanation: str
+    generalization_explanation: str
+    cross_validation_explanation: str
+    baseline_explanation: str
+    deployment_reasoning: DeploymentReasoningResponse
+    metric_tooltips: dict[str, str]
+    chart_explanations: dict[str, str]
+    beginner_notes: list[str]
+    learning_questions: list[str]
+    source: str
+    llm_used: bool
+    model: str
+    error: Optional[str] = None
 
 
 # Helper functions
@@ -223,6 +251,17 @@ def format_evaluation_log(result: dict[str, Any]) -> str:
     if result.get("task_type") == "regression":
         return f"Evaluation complete: R2 = {result.get('r2', 0):.4f}, RMSE = {result.get('rmse', 0):.4f}"
     return f"Evaluation complete: Accuracy = {result.get('accuracy', 0):.4f}, F1 = {result.get('f1', 0):.4f}"
+
+
+def persist_evaluation_insights(pipeline_id: str | None, insights: dict[str, Any]) -> str | None:
+    """Persist the structured evaluation insights as JSON for the current run."""
+    if not pipeline_id:
+        return None
+
+    insights_path = OUTPUTS_DIR / f"{pipeline_id}_evaluation_insights.json"
+    with insights_path.open("w", encoding="utf-8") as handle:
+        json.dump(make_json_safe(insights), handle, indent=2, ensure_ascii=True)
+    return str(insights_path)
 
 
 async def run_pipeline_stage(stage: str, config: PipelineConfig):
@@ -358,9 +397,22 @@ async def run_pipeline_stage(stage: str, config: PipelineConfig):
                 training,
                 config.task_type
             )
+            llm_insights = generate_evaluation_insights(
+                training,
+                result,
+                target_column=pipeline_state.target_column,
+                technical_logs=[
+                    *pipeline_state.stage_logs.get("loss", []),
+                    *pipeline_state.stage_logs.get("evaluation", []),
+                ],
+                require_openrouter=True,
+            )
+            result["llm_insights"] = llm_insights
+            result["llm_insights_path"] = persist_evaluation_insights(pipeline_state.pipeline_id, llm_insights)
             pipeline_state.stage_results["evaluation"] = result
             add_agent_summary_logs("evaluation", result)
             add_log(stage, format_evaluation_log(result))
+            add_log(stage, "Evaluation OpenRouter insights saved")
 
         elif stage == "results":
             from agents.deployment_agent import DeploymentAgent
@@ -697,16 +749,37 @@ async def get_metrics():
         "precision": evaluation.get("precision", 0),
         "recall": evaluation.get("recall", 0),
         "f1": evaluation.get("f1", 0),
+        "roc_auc": evaluation.get("roc_auc"),
         "r2": evaluation.get("r2"),
         "mae": evaluation.get("mae"),
         "mse": evaluation.get("mse"),
         "rmse": evaluation.get("rmse"),
         "best_score": training.get("best_score", 0),
+        "cv_scores": training.get("cv_scores", []),
+        "cv_std": training.get("cv_std"),
+        "train_score": training.get("train_score"),
+        "test_score": training.get("test_score"),
         "model_name": training.get("model_name"),
         "deployment_decision": evaluation.get("deployment_decision"),
         "performance_summary": evaluation.get("performance_summary"),
         "confusion_matrix": evaluation.get("confusion_matrix", []),
+        "baseline_metrics": evaluation.get("baseline_metrics"),
     }
+
+
+@app.get("/api/results/evaluation-insights", response_model=EvaluationInsightsResponse)
+async def get_evaluation_insights():
+    """Get the saved structured evaluation insights for the dashboard."""
+    evaluation = pipeline_state.stage_results.get("evaluation")
+
+    if not evaluation:
+        raise HTTPException(status_code=404, detail="Evaluation results are not available yet")
+
+    saved_insights = evaluation.get("llm_insights")
+    if not isinstance(saved_insights, dict):
+        raise HTTPException(status_code=404, detail="Saved evaluation insights are not available for this run")
+
+    return saved_insights
 
 
 @app.get("/api/results/explanation")

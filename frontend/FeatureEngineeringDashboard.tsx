@@ -107,13 +107,11 @@ const FeatureEngineeringDashboard = ({
           viewModel={viewModel}
         />
 
-        <section className="grid gap-4 lg:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)]">
-          <div className="space-y-4">
-            <SelectedFeaturesPanel features={readSelectedFeatures(stageResult)} />
-            <TopFeaturesSection features={viewModel.topFeatures} />
-            <DroppedFeaturesSection viewModel={viewModel} />
-            <BeforeAfterPanel viewModel={viewModel} />
-          </div>
+        <section className="space-y-4">
+          <SelectedFeaturesPanel features={readSelectedFeatures(stageResult)} />
+          <TopFeaturesSection features={viewModel.topFeatures} />
+          <DroppedFeaturesSection viewModel={viewModel} />
+          <BeforeAfterPanel viewModel={viewModel} />
         </section>
       </div>
     </TooltipProvider>

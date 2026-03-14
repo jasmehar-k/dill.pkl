@@ -5,14 +5,17 @@ import type { PipelineStage } from "@/data/pipelineStages";
 import type { DatasetPreviewResponse, DatasetSummary, MetricsResponse, TaskType } from "@/lib/api";
 import { getDatasetPreview } from "@/lib/api";
 import FeatureEngineeringDashboard from "./FeatureEngineeringDashboard";
+import EvaluationDashboard from "./EvaluationDashboard";
 import { StageVisualization } from "./StageVisualizations";
 
 interface StageDetailPanelProps {
   stage: PipelineStage | null;
   stageResult: Record<string, unknown> | null;
+  lossStageResult?: Record<string, unknown> | null;
   datasetSummary: DatasetSummary | null;
   metrics: MetricsResponse | null;
   stageLogs: string[];
+  lossStageLogs?: string[];
   taskType: TaskType;
   targetColumn: string | null;
   explanation?: Record<string, unknown> | null;
@@ -22,9 +25,11 @@ interface StageDetailPanelProps {
 const StageDetailPanel = ({
   stage,
   stageResult,
+  lossStageResult,
   datasetSummary,
   metrics,
   stageLogs,
+  lossStageLogs,
   taskType,
   targetColumn,
   explanation,
@@ -36,6 +41,7 @@ const StageDetailPanel = ({
   const isFeatureStage = stage?.id === "features";
   const isPreprocessing = stage?.id === "preprocessing";
   const isModelSelection = stage?.id === "model_selection";
+  const isEvaluation = stage?.id === "evaluation";
   const isResults = stage?.id === "results";
 
   const highlights = stage ? buildHighlights(stage.id, stageResult, datasetSummary, metrics) : [];
@@ -118,6 +124,16 @@ const StageDetailPanel = ({
                   stageResult={stageResult}
                   metrics={metrics}
                   stageLogs={stageLogs}
+                  taskType={taskType}
+                  targetColumn={targetColumn}
+                />
+              ) : isEvaluation ? (
+                <EvaluationDashboard
+                  stage={stage}
+                  stageResult={stageResult}
+                  lossStageResult={lossStageResult ?? null}
+                  metrics={metrics}
+                  stageLogs={[...(lossStageLogs ?? []), ...stageLogs]}
                   taskType={taskType}
                   targetColumn={targetColumn}
                 />
@@ -339,6 +355,7 @@ const StageLogs = ({
 
 const getPanelWidthClass = (stageId: string) => {
   if (stageId === "features") return "max-w-[min(96vw,1200px)]";
+  if (stageId === "evaluation") return "max-w-[min(96vw,1240px)]";
   if (stageId === "model_selection" || stageId === "preprocessing") {
     return "max-w-[min(92vw,960px)]";
   }
