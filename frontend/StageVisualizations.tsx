@@ -245,6 +245,46 @@ const MetricsCard = ({ metrics }: { metrics: MetricsResponse | null }) => {
   );
 };
 
+const ModelSelectionViz = ({ stageResult }: { stageResult: Record<string, unknown> | null }) => {
+  if (!stageResult) {
+    return <EmptyState message="Model selection details will appear after the selection stage completes." />;
+  }
+
+  const selectedModel = String(stageResult.selected_model ?? "Pending");
+  const candidates = (stageResult.candidate_models as string[] | undefined) || [];
+  const llmReturned = stageResult.llm_returned as boolean | undefined;
+  const reasoning = String(stageResult.reasoning ?? "");
+
+  return (
+    <div className="space-y-3 text-xs">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-muted-foreground">Selected:</span>
+        <span className="rounded-md bg-accent/10 px-2 py-1 font-mono text-[11px] text-accent">{selectedModel}</span>
+        {typeof llmReturned === "boolean" && (
+          <span className="rounded-md bg-secondary px-2 py-1 text-[11px] text-muted-foreground">
+            LLM {llmReturned ? "returned" : "fallback"}
+          </span>
+        )}
+      </div>
+      {candidates.length > 0 ? (
+        <div className="flex flex-wrap gap-2">
+          {candidates.slice(0, 6).map((candidate) => (
+            <span
+              key={candidate}
+              className="rounded-md bg-secondary px-2 py-1 font-mono text-[10px] text-muted-foreground"
+            >
+              {candidate}
+            </span>
+          ))}
+        </div>
+      ) : (
+        <p className="text-muted-foreground">Candidate models will appear here after selection runs.</p>
+      )}
+      {reasoning && <p className="text-[11px] text-muted-foreground">{reasoning}</p>}
+    </div>
+  );
+};
+
 export const StageVisualization = ({
   stage,
   stageResult,
@@ -258,6 +298,7 @@ export const StageVisualization = ({
     table: <DataTable datasetSummary={datasetSummary} />,
     confusionMatrix: <ConfusionMatrix metrics={metrics} stageResult={stageResult} />,
     metrics: <MetricsCard metrics={metrics} />,
+    modelSelection: <ModelSelectionViz stageResult={stageResult} />,
   };
 
   return <>{vizMap[stage.vizType] || <EmptyState message="No visualization available for this stage yet." />}</>;

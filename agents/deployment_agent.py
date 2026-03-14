@@ -53,7 +53,7 @@ class DeploymentAgent(BaseAgent):
             - artifacts
         """
         try:
-            logger.info("Deploying model")
+            # logger.info("Deploying model")
 
             try:
                 import joblib
@@ -110,11 +110,11 @@ class DeploymentAgent(BaseAgent):
                 "deployment_success": True,
             }
 
-            logger.info(f"Model deployed to {model_path}")
+            # logger.info(f"Model deployed to {model_path}")
             return result
 
         except Exception as e:
-            logger.exception(f"Error in deployment: {e}")
+            # logger.exception(f"Error in deployment: {e}")
             raise AgentExecutionError(
                 f"Deployment failed: {str(e)}",
                 agent_name=self.name,

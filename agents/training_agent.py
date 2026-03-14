@@ -64,7 +64,7 @@ class TrainingAgent(BaseAgent):
             - training_time
         """
         try:
-            logger.info(f"Training {model_selection.get('selected_model', 'model')}")
+            # logger.info(f"Training {model_selection.get('selected_model', 'model')}")
 
             test_size = pipeline_config.get("test_size", 0.2)
             random_state = pipeline_config.get("random_state", 42)
@@ -158,11 +158,11 @@ class TrainingAgent(BaseAgent):
                 "selected_features": list(X.columns),
             }
 
-            logger.info(f"Training complete: CV score = {cv_scores.mean():.4f}")
+            # logger.info(f"Training complete: CV score = {cv_scores.mean():.4f}")
             return result
 
         except Exception as e:
-            logger.exception(f"Error in training: {e}")
+            # logger.exception(f"Error in training: {e}")
             raise AgentExecutionError(
                 f"Training failed: {str(e)}",
                 agent_name=self.name,
@@ -196,7 +196,7 @@ class TrainingAgent(BaseAgent):
                 else:
                     return xgb.XGBRegressor(**hyperparameters)
             except ImportError:
-                logger.warning("XGBoost not available, falling back to RandomForest")
+                # logger.warning("XGBoost not available, falling back to RandomForest")
                 if task_type == "classification":
                     return RandomForestClassifier(**hyperparameters)
                 else:

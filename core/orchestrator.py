@@ -90,14 +90,14 @@ class Orchestrator:
         preview_columns = ", ".join(str(column) for column in df.columns[:6])
         if len(df.columns) > 6:
             preview_columns += ", ..."
-        self._logger.info(
-            "Starting AutoML pipeline | rows=%s | cols=%s | target=%s | task_type=%s | columns=[%s]",
-            len(df),
-            len(df.columns),
-            target_column,
-            task_type,
-            preview_columns,
-        )
+        # self._logger.info(
+        #     "Starting AutoML pipeline | rows=%s | cols=%s | target=%s | task_type=%s | columns=[%s]",
+        #     len(df),
+        #     len(df.columns),
+        #     target_column,
+        #     task_type,
+        #     preview_columns,
+        # )
         self._initialize_agents()
 
         try:
@@ -107,16 +107,16 @@ class Orchestrator:
             }
 
             # Stage 1: Data Analysis
-            self._logger.info("Stage 1: Analyzing dataset")
+            # self._logger.info("Stage 1: Analyzing dataset")
             self.stage_statuses["analysis"] = "running"
             analysis_result = await self.data_analyzer.run(df, target_column)
             self.stage_results["analysis"] = analysis_result
             self.stage_statuses["analysis"] = "completed"
             self.memory.add(Message(role="data_analyzer", content=str(analysis_result)))
-            self._logger.info(f"Analysis complete: {analysis_result.get('feature_count', 0)} features")
+            # self._logger.info(f"Analysis complete: {analysis_result.get('feature_count', 0)} features")
 
             # Stage 2: Preprocessing
-            self._logger.info("Stage 2: Preprocessing data")
+            # self._logger.info("Stage 2: Preprocessing data")
             self.stage_statuses["preprocessing"] = "running"
             preprocessing_result = await self.preprocessor.run(
                 df, analysis_result, target_column, test_size, random_state
@@ -126,7 +126,7 @@ class Orchestrator:
             self.memory.add(Message(role="preprocessor", content=str(preprocessing_result)))
 
             # Stage 3: Feature Engineering
-            self._logger.info("Stage 3: Feature engineering")
+            # self._logger.info("Stage 3: Feature engineering")
             self.stage_statuses["features"] = "running"
             features_result = await self.feature_engineering.run(
                 df, preprocessing_result, target_column
@@ -134,31 +134,31 @@ class Orchestrator:
             self.stage_results["features"] = features_result
             self.stage_statuses["features"] = "completed"
             self.memory.add(Message(role="feature_engineering", content=str(features_result)))
-            self._logger.info(f"Features: {features_result.get('final_feature_count', 0)} selected")
+            # self._logger.info(f"Features: {features_result.get('final_feature_count', 0)} selected")
 
             # Stage 4: Model Selection
-            self._logger.info("Stage 4: Selecting model")
+            # self._logger.info("Stage 4: Selecting model")
             self.stage_statuses["model_selection"] = "running"
             model_result = await self.model_selection.run(
-                df, features_result, target_column, task_type
+                df, features_result, target_column, task_type, analysis_result
             )
             self.stage_results["model_selection"] = model_result
             self.stage_statuses["model_selection"] = "completed"
             self.memory.add(Message(role="model_selection", content=str(model_result)))
-            self._logger.info(f"Model selected: {model_result.get('selected_model')}")
+            # self._logger.info(f"Model selected: {model_result.get('selected_model')}")
 
             # Stage 5: Training
-            self._logger.info("Stage 5: Training model")
+            # self._logger.info("Stage 5: Training model")
             self.stage_statuses["training"] = "running"
             model_result["target_column"] = target_column
             training_result = await self.training.run(df, model_result, pipeline_config)
             self.stage_results["training"] = training_result
             self.stage_statuses["training"] = "completed"
             self.memory.add(Message(role="training", content=str(training_result)))
-            self._logger.info(f"Training complete: CV score = {training_result.get('best_score', 0):.4f}")
+            # self._logger.info(f"Training complete: CV score = {training_result.get('best_score', 0):.4f}")
 
             # Stage 6: Evaluation
-            self._logger.info("Stage 6: Evaluating model")
+            # self._logger.info("Stage 6: Evaluating model")
             self.stage_statuses["evaluation"] = "running"
             evaluation_result = await self.evaluation.run(training_result, task_type)
             self.stage_results["evaluation"] = evaluation_result
@@ -178,7 +178,7 @@ class Orchestrator:
                 )
 
             # Stage 7: Deployment
-            self._logger.info("Stage 7: Deploying model")
+            # self._logger.info("Stage 7: Deploying model")
             self.stage_statuses["deployment"] = "running"
             deployment_result = await self.deployment.run(training_result, evaluation_result)
             self.stage_results["deployment"] = deployment_result
@@ -186,17 +186,17 @@ class Orchestrator:
             self.memory.add(Message(role="deployment", content=str(deployment_result)))
 
             # Stage 8: Explanation
-            self._logger.info("Stage 8: Generating explanations")
+            # self._logger.info("Stage 8: Generating explanations")
             self.stage_statuses["explanation"] = "running"
             explanation_result = await self.explanation.run(training_result, evaluation_result)
             self.stage_results["explanation"] = explanation_result
             self.stage_statuses["explanation"] = "completed"
 
-            self._logger.info("Pipeline completed successfully")
+            # self._logger.info("Pipeline completed successfully")
             return self.stage_results
 
         except Exception as e:
-            self._logger.exception(f"Pipeline failed: {e}")
+            # self._logger.exception(f"Pipeline failed: {e}")
             raise PipelineError(
                 f"Pipeline failed: {str(e)}",
                 failed_at_stage=list(self.stage_statuses.keys())[-1] if self.stage_statuses else "unknown",

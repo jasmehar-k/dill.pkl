@@ -28,7 +28,16 @@ const PipelineLogs = ({
 
   const logEntries = useMemo(() => {
     const entries: LogEntry[] = [];
-    const stageOrder = ["analysis", "preprocessing", "features", "training", "loss", "evaluation", "results"];
+    const stageOrder = [
+      "analysis",
+      "preprocessing",
+      "features",
+      "model_selection",
+      "training",
+      "loss",
+      "evaluation",
+      "results",
+    ];
 
     for (const stageId of stageOrder) {
       const messages = stageLogs[stageId] || [];
@@ -72,6 +81,7 @@ const PipelineLogs = ({
       analysis: "Analysis",
       preprocessing: "Preprocess",
       features: "Features",
+      model_selection: "Model Select",
       training: "Training",
       loss: "Loss",
       evaluation: "Eval",

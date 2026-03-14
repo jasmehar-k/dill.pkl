@@ -72,12 +72,34 @@ class OpenRouterClient:
         content = message.get("content", "")
 
         if isinstance(content, list):
-            text_parts = [part.get("text", "") for part in content if isinstance(part, dict)]
-            return "\n".join(part for part in text_parts if part).strip()
+            text_parts: list[str] = []
+            for part in content:
+                if not isinstance(part, dict):
+                    continue
+                if isinstance(part.get("text"), str):
+                    text_parts.append(part["text"])
+                    continue
+                if isinstance(part.get("content"), str):
+                    text_parts.append(part["content"])
+                    continue
+                if isinstance(part.get("value"), str):
+                    text_parts.append(part["value"])
+                    continue
+                if isinstance(part.get("type"), str) and part.get("type") == "text" and isinstance(part.get("data"), str):
+                    text_parts.append(part["data"])
+            assembled = "\n".join(part for part in text_parts if part).strip()
+            if assembled:
+                return assembled
+            self._logger.warning("OpenRouter returned an empty content parts payload: %s", json.dumps(payload, ensure_ascii=True))
+            raise RuntimeError("OpenRouter returned an unsupported content payload")
 
         if isinstance(content, str):
             return content.strip()
 
+        if content is None and isinstance(message.get("reasoning"), str):
+            return message["reasoning"].strip()
+
+        self._logger.warning("OpenRouter returned an unsupported content payload: %s", json.dumps(payload, ensure_ascii=True))
         raise RuntimeError("OpenRouter returned an unsupported content payload")
 
     def generate_json(

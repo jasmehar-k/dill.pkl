@@ -1,7 +1,9 @@
+import { useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { X } from "lucide-react";
 import type { PipelineStage } from "@/data/pipelineStages";
 import type { DatasetSummary, MetricsResponse, TaskType } from "@/lib/api";
+import { getDatasetPreview } from "@/lib/api";
 import { StageVisualization } from "./StageVisualizations";
 import FeatureEngineeringDashboard from "./FeatureEngineeringDashboard";
 
@@ -26,8 +28,28 @@ const StageDetailPanel = ({
   targetColumn,
   onClose,
 }: StageDetailPanelProps) => {
+  const [datasetPreview, setDatasetPreview] = useState<{ rows: Array<Record<string, unknown>>; columns: string[] } | null>(null);
+  const [isLoadingPreview, setIsLoadingPreview] = useState(false);
   const highlights = stage ? buildHighlights(stage.id, stageResult, datasetSummary, metrics) : [];
   const panelWidthClass = stage?.id === "features" ? "max-w-[min(96vw,1200px)]" : "max-w-lg";
+  const modelPanel = stage?.id === "model_selection" ? buildModelSelectionPanel(stageResult) : null;
+  const isPreprocessing = stage?.id === "preprocessing";
+  const aboutText = useMemo(() => {
+    if (!stage) return "";
+    if (isPreprocessing) {
+      return "This step prepares your dataset so it can be used by machine learning models. Missing values are filled in, categories are converted into numbers, numeric values are scaled, and the data is split into training and testing sets to evaluate performance.";
+    }
+    return stage.details;
+  }, [isPreprocessing, stage]);
+
+  useEffect(() => {
+    if (!isPreprocessing || !stage) return;
+    setIsLoadingPreview(true);
+    void getDatasetPreview(5)
+      .then(setDatasetPreview)
+      .catch(() => setDatasetPreview(null))
+      .finally(() => setIsLoadingPreview(false));
+  }, [isPreprocessing, stage]);
 
   return (
     <AnimatePresence>
@@ -48,14 +70,7 @@ const StageDetailPanel = ({
             transition={{ type: "spring", damping: 30, stiffness: 300 }}
           >
             <div className="space-y-6 p-6">
-              <div className="flex items-start justify-between">
-                <div className="flex items-center gap-3">
-                  <span className="text-3xl">{stage.icon}</span>
-                  <div>
-                    <h2 className="text-xl font-semibold text-foreground">{stage.label}</h2>
-                    <p className="text-sm text-muted-foreground">{stage.description}</p>
-                  </div>
-                </div>
+              <div className="flex justify-end">
                 <button
                   onClick={onClose}
                   className="rounded-lg p-2 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
@@ -164,9 +179,9 @@ const buildHighlights = (
       ];
     case "preprocessing":
       return [
-        { label: "Train size", value: String(stageResult?.train_size ?? "Pending") },
-        { label: "Test size", value: String(stageResult?.test_size ?? "Pending") },
-        { label: "Features", value: String(stageResult?.feature_count ?? "Pending") },
+        { label: "Training data", value: `${stageResult?.train_size ?? "Pending"} rows` },
+        { label: "Evaluation data", value: `${stageResult?.test_size ?? "Pending"} rows` },
+        { label: "Model features", value: `${stageResult?.feature_count ?? "Pending"} columns used` },
       ];
     case "features":
       return [
@@ -179,6 +194,10 @@ const buildHighlights = (
           label: "PCA",
           value: stageResult?.pca_result ? "Enabled" : "Not used",
         },
+      ];
+    case "model_selection":
+      return [
+        { label: "Selected model", value: String(stageResult?.selected_model ?? "Pending") },
       ];
     case "training":
       return [
@@ -227,6 +246,265 @@ const buildHighlights = (
   }
 };
 
+const MODEL_EXPLANATIONS: Record<string, string> = {
+  RandomForest:
+    "Random Forest is an ensemble of decision trees that averages many models to improve accuracy and reduce overfitting.",
+  GradientBoosting:
+    "Gradient Boosting builds trees sequentially to correct errors, often delivering strong tabular performance.",
+  XGBoost:
+    "XGBoost is a high-performance gradient boosting variant known for strong accuracy on structured data.",
+  LogisticRegression:
+    "Logistic Regression is a linear model that provides a fast, interpretable classification baseline.",
+  Ridge:
+    "Ridge Regression is a linear model with regularization to reduce overfitting on correlated features.",
+  SVM:
+    "Support Vector Machines separate classes with a margin and can capture non-linear boundaries with kernels.",
+  SVR:
+    "Support Vector Regression applies SVM principles to continuous targets with kernel-based flexibility.",
+  LinearRegression:
+    "Linear Regression is a simple baseline for continuous targets with easy interpretability.",
+};
+
+const MODEL_CAPABILITIES: Record<string, string[]> = {
+  RandomForest: ["Handles non-linear relationships", "Robust to outliers", "Works with mixed data types"],
+  GradientBoosting: ["Captures complex interactions", "Strong tabular performance", "Handles mixed feature types"],
+  XGBoost: ["High predictive performance", "Handles non-linear patterns", "Scales to larger datasets"],
+  LogisticRegression: ["Fast baseline classifier", "Interpretable coefficients", "Works with sparse features"],
+  Ridge: ["Stable for collinear features", "Fast to train", "Good linear baseline"],
+  SVM: ["Effective on medium-size datasets", "Handles non-linear boundaries", "Works with complex margins"],
+  SVR: ["Captures non-linear regression", "Works with smaller datasets", "Kernel-based flexibility"],
+  LinearRegression: ["Simple regression baseline", "Fast training", "Easy to interpret"],
+};
+
+const PARAM_HINTS: Record<string, string> = {
+  n_estimators: "Number of trees in the ensemble.",
+  max_depth: "Limits tree depth to reduce overfitting.",
+  min_samples_split: "Minimum samples required to split a node.",
+  min_samples_leaf: "Minimum samples required at a leaf node.",
+  max_features: "Controls the number of features considered per split.",
+  learning_rate: "Step size for gradient updates.",
+  subsample: "Fraction of samples used for each boosting round.",
+  colsample_bytree: "Fraction of features used per tree.",
+  C: "Inverse regularization strength.",
+  alpha: "Regularization strength for linear models.",
+  kernel: "Kernel function used by the model.",
+  gamma: "Kernel coefficient controlling decision boundary.",
+  epsilon: "Margin of tolerance for regression.",
+};
+
+const formatNumber = (value: number) => value.toLocaleString();
+
+const getSelectedModel = (stageResult: Record<string, unknown> | null) =>
+  String(stageResult?.selected_model ?? "");
+
+const getCandidates = (stageResult: Record<string, unknown> | null) =>
+  (stageResult?.candidate_models as string[] | undefined) || [];
+
+const getSignals = (stageResult: Record<string, unknown> | null) =>
+  (stageResult?.analysis_signals as Record<string, unknown> | undefined) || {};
+
+const getParamEntries = (stageResult: Record<string, unknown> | null) => {
+  const params = stageResult?.hyperparameters as Record<string, unknown> | undefined;
+  if (!params) return [];
+  return Object.entries(params).sort(([a], [b]) => a.localeCompare(b));
+};
+
+const describeDatasetSize = (nSamples: number) => {
+  if (nSamples >= 50000) return "Large";
+  if (nSamples >= 5000) return "Medium";
+  return "Small";
+};
+
+const describeFeatureCount = (nFeatures: number) => {
+  if (nFeatures >= 100) return "High";
+  if (nFeatures >= 20) return "Moderate";
+  return "Low";
+};
+
+const buildComplexity = (nSamples: number, modelName: string) => {
+  const lower = modelName.toLowerCase();
+  const heavyModels = ["xgboost", "gradient", "svm", "svr"];
+  const base = heavyModels.some((key) => lower.includes(key)) ? "High" : "Medium";
+  if (nSamples < 5000) return { complexity: "Low", time: "1–3 seconds", memory: "Low" };
+  if (nSamples > 80000) return { complexity: base === "High" ? "High" : "Medium", time: "8–20 seconds", memory: "High" };
+  return { complexity: base, time: "3–10 seconds", memory: base === "High" ? "High" : "Moderate" };
+};
+
+const buildNotChosenReason = (candidate: string, selected: string, nSamples: number) => {
+  if (candidate === selected) return "Selected as the best fit for this dataset.";
+  const lower = candidate.toLowerCase();
+  if (lower.includes("linear") || lower.includes("logistic") || lower.includes("ridge")) {
+    return "May underfit non-linear relationships in this dataset.";
+  }
+  if (lower.includes("xgboost")) {
+    return nSamples > 50000 ? "Higher training cost at this scale." : "Complexity not needed for this dataset.";
+  }
+  if (lower.includes("svm") || lower.includes("svr")) {
+    return nSamples > 10000 ? "Training cost grows quickly with dataset size." : "Less robust to noisy tabular features.";
+  }
+  if (lower.includes("gradient")) {
+    return "Longer training time with similar expected accuracy.";
+  }
+  return "Selected model offers a better balance of accuracy and efficiency.";
+};
+
+const buildModelSelectionPanel = (stageResult: Record<string, unknown> | null) => {
+  if (!stageResult) return null;
+
+  const selectedModel = getSelectedModel(stageResult);
+  const candidates = getCandidates(stageResult);
+  const params = getParamEntries(stageResult);
+  const signals = getSignals(stageResult);
+  const nSamples = Number(stageResult.n_samples || 0);
+  const nFeatures = Number(stageResult.n_features || 0);
+  const taskType = String(stageResult.task_type || "");
+  const classBalance = stageResult.class_balance as number | undefined;
+  const datasetSizeLabel = nSamples ? `${describeDatasetSize(nSamples)} (${formatNumber(nSamples)} rows)` : "Pending";
+  const featureCountLabel = nFeatures ? `${describeFeatureCount(nFeatures)} (${nFeatures})` : "Pending";
+  const capabilities = MODEL_CAPABILITIES[selectedModel] || [];
+  const explanation = MODEL_EXPLANATIONS[selectedModel] || "This model was selected as the best fit for the dataset.";
+  const complexity = buildComplexity(nSamples, selectedModel);
+  const llmSummary = String(stageResult.llm_summary ?? "").trim();
+
+  return (
+    <div className="space-y-4">
+      <div className="grid gap-3 md:grid-cols-2">
+        <div className="glass-card space-y-2 p-4">
+          <h3 className="text-sm font-medium text-accent">Selected model</h3>
+          <div className="flex items-center gap-2">
+            <span className="rounded-md bg-accent/10 px-2 py-1 font-mono text-[12px] text-accent">
+              {selectedModel || "Pending"}
+            </span>
+          </div>
+        </div>
+        <div className="glass-card space-y-2 p-4">
+          <h3 className="text-sm font-medium text-accent">About {selectedModel || "this model"}</h3>
+          <p className="text-[11px] text-secondary-foreground">{explanation}</p>
+        </div>
+      </div>
+
+      {llmSummary && (
+        <div className="space-y-2">
+          <h3 className="text-sm font-medium text-accent">Model selection summary</h3>
+          <div className="glass-card p-4 text-sm text-secondary-foreground">{llmSummary}</div>
+        </div>
+      )}
+
+      <div className="glass-card space-y-2 p-4">
+        <h3 className="text-sm font-medium text-accent">Candidate models</h3>
+        <div className="space-y-2">
+          {candidates.length > 0 ? (
+            candidates.map((candidate) => (
+              <div key={candidate} className="flex items-center justify-between rounded-lg bg-secondary/50 px-3 py-2 text-xs">
+                <div className="flex items-center gap-2">
+                  <span className={`text-[10px] ${candidate === selectedModel ? "text-accent" : "text-muted-foreground"}`}>
+                    {candidate === selectedModel ? "✓" : "•"}
+                  </span>
+                  <span className="font-mono text-[11px] text-foreground">{candidate}</span>
+                </div>
+                <span className="text-[10px] text-muted-foreground">
+                  {buildNotChosenReason(candidate, selectedModel, nSamples)}
+                </span>
+              </div>
+            ))
+          ) : (
+            <p className="text-xs text-muted-foreground">Candidate models will appear after selection runs.</p>
+          )}
+        </div>
+      </div>
+
+      <div className="glass-card space-y-2 p-4">
+        <h3 className="text-sm font-medium text-accent">Model configuration</h3>
+        <div className="space-y-2">
+          {params.length > 0 ? (
+            params.map(([key, value]) => (
+              <div key={key} className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="font-mono text-[11px] text-foreground">{key}</p>
+                  {PARAM_HINTS[key] && <p className="text-[10px] text-muted-foreground">{PARAM_HINTS[key]}</p>}
+                </div>
+                <span className="rounded-md bg-secondary px-2 py-1 font-mono text-[10px] text-foreground/80">
+                  {String(value)}
+                </span>
+              </div>
+            ))
+          ) : (
+            <p className="text-xs text-muted-foreground">Hyperparameters will appear after selection runs.</p>
+          )}
+        </div>
+      </div>
+
+      <div className="glass-card space-y-2 p-4">
+        <h3 className="text-sm font-medium text-accent">Signals used</h3>
+        <div className="grid grid-cols-2 gap-2 text-[11px]">
+          <div className="rounded-md bg-secondary/50 p-2">
+            <p className="text-muted-foreground">Dataset size</p>
+            <p className="font-mono text-foreground">{datasetSizeLabel}</p>
+          </div>
+          <div className="rounded-md bg-secondary/50 p-2">
+            <p className="text-muted-foreground">Feature count</p>
+            <p className="font-mono text-foreground">{featureCountLabel}</p>
+          </div>
+          <div className="rounded-md bg-secondary/50 p-2">
+            <p className="text-muted-foreground">Task type</p>
+            <p className="font-mono text-foreground">{taskType || "Pending"}</p>
+          </div>
+          <div className="rounded-md bg-secondary/50 p-2">
+            <p className="text-muted-foreground">Class balance</p>
+            <p className="font-mono text-foreground">
+              {typeof classBalance === "number" ? `${(classBalance * 100).toFixed(1)}%` : "N/A"}
+            </p>
+          </div>
+          <div className="rounded-md bg-secondary/50 p-2">
+            <p className="text-muted-foreground">High correlations</p>
+            <p className="font-mono text-foreground">{String(signals.high_correlation_count ?? "Pending")}</p>
+          </div>
+          <div className="rounded-md bg-secondary/50 p-2">
+            <p className="text-muted-foreground">Outlier risk</p>
+            <p className="font-mono text-foreground">
+              {signals.has_outliers ? "Detected" : signals.has_outliers === false ? "Low" : "Pending"}
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <div className="glass-card space-y-2 p-4">
+        <h3 className="text-sm font-medium text-accent">Expected model behavior</h3>
+        <div className="space-y-1 text-[11px] text-secondary-foreground">
+          {capabilities.length > 0 ? (
+            capabilities.map((item) => (
+              <div key={item} className="flex items-center gap-2">
+                <span className="text-accent">✓</span>
+                <span>{item}</span>
+              </div>
+            ))
+          ) : (
+            <p className="text-muted-foreground">No capability profile available for this model yet.</p>
+          )}
+        </div>
+      </div>
+
+      <div className="glass-card space-y-2 p-4">
+        <h3 className="text-sm font-medium text-accent">Training estimate</h3>
+        <div className="flex flex-wrap gap-3 text-[11px] text-secondary-foreground">
+          <div>
+            <p className="text-muted-foreground">Complexity</p>
+            <p className="font-mono text-foreground">{complexity.complexity}</p>
+          </div>
+          <div>
+            <p className="text-muted-foreground">Expected time</p>
+            <p className="font-mono text-foreground">{complexity.time}</p>
+          </div>
+          <div>
+            <p className="text-muted-foreground">Memory</p>
+            <p className="font-mono text-foreground">{complexity.memory}</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const formatMetric = (value: number | null | undefined, asPercent = false) => {
   if (typeof value !== "number" || Number.isNaN(value)) return "Pending";
   return asPercent ? `${(value * 100).toFixed(1)}%` : value.toFixed(3);
@@ -235,6 +513,48 @@ const formatMetric = (value: number | null | undefined, asPercent = false) => {
 const formatLast = (values?: number[]) => {
   if (!values || values.length === 0) return "Pending";
   return values[values.length - 1].toFixed(3);
+};
+
+const PreprocessExplanation = ({
+  stageResult,
+  datasetSummary,
+}: {
+  stageResult: Record<string, unknown> | null;
+  datasetSummary: DatasetSummary | null;
+}) => {
+  const summary = (stageResult?.explanation as string | undefined) || "We filled missing values, simplified categories, and prepared numeric columns so the model can learn reliably.";
+  const train = stageResult?.train_size as number | undefined;
+  const test = stageResult?.test_size as number | undefined;
+  const total = datasetSummary?.rows;
+  const integrityOK = typeof train === "number" && typeof test === "number" && typeof total === "number" && train + test === total;
+
+  return (
+    <div className="space-y-2">
+      <p className="text-foreground">{summary}</p>
+      <ul className="ml-4 list-disc space-y-1 text-sm text-secondary-foreground">
+        <li>Any missing values were filled in automatically.</li>
+        <li>Columns with categories were converted into numbers so the model can use them.</li>
+        <li>Numeric features were standardized so large ranges don&apos;t dominate the model.</li>
+      </ul>
+      {(train || test) && (
+        <p className="text-sm text-secondary-foreground">
+          Finally, the data was split into {train ? train.toLocaleString() : "?"} rows for training and{" "}
+          {test ? test.toLocaleString() : "?"} rows to test how well the model performs on new data.
+        </p>
+      )}
+      {integrityOK && <p className="text-sm font-medium text-primary">✔ Dataset integrity preserved (0 rows dropped)</p>}
+      <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+        {["Raw data", "Clean missing values", "Convert categories", "Prepare numeric columns", "Train/Test split"].map(
+          (step, index, arr) => (
+            <div key={step} className="flex items-center gap-1">
+              <span className="rounded bg-secondary px-2 py-1">{step}</span>
+              {index < arr.length - 1 && <span className="text-muted-foreground">→</span>}
+            </div>
+          ),
+        )}
+      </div>
+    </div>
+  );
 };
 
 export default StageDetailPanel;
