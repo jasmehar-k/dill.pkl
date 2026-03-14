@@ -1,5 +1,5 @@
 import { motion } from "framer-motion";
-import { Check, Loader2 } from "lucide-react";
+import { AlertCircle, Check, Loader2 } from "lucide-react";
 import { StageStatus, PipelineStage } from "@/data/pipelineStages";
 import {
   HoverCard,
@@ -16,7 +16,7 @@ interface PipelineNodeProps {
 }
 
 const PipelineNode = ({ stage, status, index, onClick }: PipelineNodeProps) => {
-  const isClickable = status === "completed";
+  const isClickable = status === "completed" || status === "failed";
 
   const nodeContent = (
     <motion.button
@@ -31,6 +31,7 @@ const PipelineNode = ({ stage, status, index, onClick }: PipelineNodeProps) => {
           ${status === "waiting" ? "bg-secondary border-border/50 opacity-40" : ""}
           ${status === "running" ? "bg-secondary border-primary/60 glow-purple" : ""}
           ${status === "completed" ? "bg-accent/10 border-accent/80 glow-green-sm group-hover:glow-green" : ""}
+          ${status === "failed" ? "bg-destructive/10 border-destructive/70" : ""}
         `}
         whileHover={isClickable ? { scale: 1.1, y: -4 } : {}}
         whileTap={isClickable ? { scale: 0.95 } : {}}
@@ -45,6 +46,8 @@ const PipelineNode = ({ stage, status, index, onClick }: PipelineNodeProps) => {
 
         {status === "running" ? (
           <Loader2 className="w-6 h-6 text-primary animate-spin" />
+        ) : status === "failed" ? (
+          <AlertCircle className="w-6 h-6 text-destructive" />
         ) : status === "completed" ? (
           <div className="relative">
             <span className="opacity-60">{stage.icon}</span>
@@ -67,6 +70,7 @@ const PipelineNode = ({ stage, status, index, onClick }: PipelineNodeProps) => {
           ${status === "waiting" ? "text-muted-foreground/40" : ""}
           ${status === "running" ? "text-primary" : ""}
           ${status === "completed" ? "text-foreground group-hover:text-accent" : ""}
+          ${status === "failed" ? "text-destructive" : ""}
         `}
       >
         {stage.label}
@@ -89,6 +93,9 @@ const PipelineNode = ({ stage, status, index, onClick }: PipelineNodeProps) => {
             )}
             {status === "running" && (
               <span className="ml-auto text-[10px] font-mono text-primary animate-pulse">running...</span>
+            )}
+            {status === "failed" && (
+              <span className="ml-auto text-[10px] font-mono text-destructive">failed</span>
             )}
           </div>
           <p className="text-[11px] text-muted-foreground">{stage.description}</p>

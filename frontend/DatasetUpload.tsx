@@ -1,18 +1,19 @@
 import { useState } from "react";
 import { motion } from "framer-motion";
-import { Upload, FileSpreadsheet } from "lucide-react";
+import { FileSpreadsheet, Loader2, Upload } from "lucide-react";
 
 interface DatasetUploadProps {
-  onUpload: (fileName: string) => void;
+  fileName?: string | null;
+  isUploading: boolean;
+  error?: string | null;
+  onUpload: (file: File) => Promise<void> | void;
 }
 
-const DatasetUpload = ({ onUpload }: DatasetUploadProps) => {
+const DatasetUpload = ({ fileName, isUploading, error, onUpload }: DatasetUploadProps) => {
   const [isDragging, setIsDragging] = useState(false);
-  const [fileName, setFileName] = useState<string | null>(null);
 
-  const handleFile = (name: string) => {
-    setFileName(name);
-    onUpload(name);
+  const handleFile = async (file: File) => {
+    await onUpload(file);
   };
 
   return (
@@ -26,33 +27,38 @@ const DatasetUpload = ({ onUpload }: DatasetUploadProps) => {
         e.preventDefault();
         setIsDragging(false);
         const file = e.dataTransfer.files[0];
-        if (file) handleFile(file.name);
+        if (file) {
+          void handleFile(file);
+        }
       }}
       onClick={() => {
+        if (isUploading) return;
         const input = document.createElement("input");
         input.type = "file";
         input.accept = ".csv,.json,.xlsx";
         input.onchange = (e) => {
           const file = (e.target as HTMLInputElement).files?.[0];
-          if (file) handleFile(file.name);
+          if (file) {
+            void handleFile(file);
+          }
         };
         input.click();
       }}
       whileHover={{ scale: 1.005 }}
       whileTap={{ scale: 0.995 }}
     >
-      <div className="flex items-center gap-3">
+      <div className="flex items-start gap-3">
         {fileName ? (
           <>
             <FileSpreadsheet className="w-5 h-5 text-accent" />
             <div>
               <p className="text-sm font-medium text-foreground">{fileName}</p>
-              <p className="text-[11px] text-accent font-mono">Dataset loaded</p>
+              <p className="text-[11px] text-accent font-mono">{isUploading ? "Uploading..." : "Dataset loaded"}</p>
             </div>
           </>
         ) : (
           <>
-            <Upload className="w-5 h-5 text-muted-foreground" />
+            {isUploading ? <Loader2 className="w-5 h-5 text-primary animate-spin" /> : <Upload className="w-5 h-5 text-muted-foreground" />}
             <div>
               <p className="text-sm text-foreground">Upload Dataset</p>
               <p className="text-[11px] text-muted-foreground">Drop a .csv, .json, or .xlsx file</p>
@@ -60,6 +66,7 @@ const DatasetUpload = ({ onUpload }: DatasetUploadProps) => {
           </>
         )}
       </div>
+      {error && <p className="mt-3 text-[11px] text-destructive">{error}</p>}
     </motion.div>
   );
 };

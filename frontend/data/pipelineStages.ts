@@ -1,4 +1,4 @@
-export type StageStatus = "waiting" | "running" | "completed";
+export type StageStatus = "waiting" | "running" | "completed" | "failed";
 
 export interface PipelineStage {
   id: string;

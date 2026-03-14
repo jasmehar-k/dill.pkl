@@ -1,37 +1,50 @@
 import type { ReactNode } from "react";
-import { PipelineStage } from "@/data/pipelineStages";
+import type { PipelineStage } from "@/data/pipelineStages";
+import type { DatasetSummary, MetricsResponse } from "@/lib/api";
 
-const Heatmap = () => {
-  const data = [
-    [1.0, 0.8, 0.3, -0.2, 0.5],
-    [0.8, 1.0, 0.4, -0.1, 0.6],
-    [0.3, 0.4, 1.0, 0.7, -0.3],
-    [-0.2, -0.1, 0.7, 1.0, 0.2],
-    [0.5, 0.6, -0.3, 0.2, 1.0],
-  ];
-  const labels = ["age", "income", "score", "hours", "rating"];
+interface StageVisualizationProps {
+  stage: PipelineStage;
+  stageResult: Record<string, unknown> | null;
+  datasetSummary: DatasetSummary | null;
+  metrics: MetricsResponse | null;
+}
+
+const EmptyState = ({ message }: { message: string }) => (
+  <p className="py-8 text-center text-sm text-muted-foreground">{message}</p>
+);
+
+const Heatmap = ({ stageResult }: { stageResult: Record<string, unknown> | null }) => {
+  const correlations = (stageResult?.correlations as Record<string, Record<string, number>> | undefined) || {};
+  const labels = Object.keys(correlations).slice(0, 5);
+
+  if (labels.length === 0) {
+    return <EmptyState message="Correlation insights will appear after analysis completes." />;
+  }
 
   return (
     <div className="space-y-1">
       <div className="flex gap-1">
         <div className="w-12" />
-        {labels.map((l) => (
-          <div key={l} className="w-12 text-[10px] text-muted-foreground text-center truncate">{l}</div>
+        {labels.map((label) => (
+          <div key={label} className="w-12 truncate text-center text-[10px] text-muted-foreground">
+            {label}
+          </div>
         ))}
       </div>
-      {data.map((row, i) => (
-        <div key={i} className="flex gap-1 items-center">
-          <div className="w-12 text-[10px] text-muted-foreground text-right pr-1 truncate">{labels[i]}</div>
-          {row.map((val, j) => {
-            const hue = val > 0 ? 265 : 145;
-            const opacity = Math.abs(val);
+      {labels.map((rowLabel) => (
+        <div key={rowLabel} className="flex items-center gap-1">
+          <div className="w-12 truncate pr-1 text-right text-[10px] text-muted-foreground">{rowLabel}</div>
+          {labels.map((columnLabel) => {
+            const raw = correlations[rowLabel]?.[columnLabel] ?? 0;
+            const value = Number(raw);
+            const hue = value >= 0 ? 265 : 145;
             return (
               <div
-                key={j}
-                className="w-12 h-10 rounded-sm flex items-center justify-center text-[10px] font-mono text-foreground/80"
-                style={{ backgroundColor: `hsl(${hue} 80% 60% / ${opacity * 0.6})` }}
+                key={`${rowLabel}-${columnLabel}`}
+                className="flex h-10 w-12 items-center justify-center rounded-sm font-mono text-[10px] text-foreground/80"
+                style={{ backgroundColor: `hsl(${hue} 80% 60% / ${Math.abs(value) * 0.6})` }}
               >
-                {val.toFixed(1)}
+                {value.toFixed(1)}
               </div>
             );
           })}
@@ -41,75 +54,119 @@ const Heatmap = () => {
   );
 };
 
-const LossCurve = () => {
-  const trainLoss = [0.9, 0.65, 0.45, 0.32, 0.22, 0.16, 0.12, 0.09, 0.07, 0.06];
-  const valLoss = [0.92, 0.7, 0.52, 0.4, 0.33, 0.29, 0.27, 0.26, 0.26, 0.27];
+const LossCurve = ({ stageResult }: { stageResult: Record<string, unknown> | null }) => {
+  const trainLoss = (stageResult?.train_loss as number[] | undefined) || [];
+  const valLoss = (stageResult?.val_loss as number[] | undefined) || [];
   const h = 120;
   const w = 280;
 
-  const toPath = (data: number[]) =>
-    data.map((v, i) => `${(i / (data.length - 1)) * w},${h - v * h}`).join(" ");
+  if (trainLoss.length === 0 || valLoss.length === 0) {
+    return <EmptyState message="Loss curves will appear after training completes." />;
+  }
+
+  const toPath = (values: number[]) =>
+    values.map((value, index) => `${(index / Math.max(values.length - 1, 1)) * w},${h - value * h}`).join(" ");
 
   return (
     <svg viewBox={`-10 -10 ${w + 20} ${h + 30}`} className="w-full max-w-xs">
       <polyline points={toPath(trainLoss)} fill="none" stroke="hsl(265 80% 60%)" strokeWidth="2" />
       <polyline points={toPath(valLoss)} fill="none" stroke="hsl(145 70% 50%)" strokeWidth="2" strokeDasharray="4" />
-      <text x={w / 2} y={h + 20} textAnchor="middle" className="fill-muted-foreground text-[10px]">Epoch</text>
-      <text x={w - 10} y={h - trainLoss[trainLoss.length - 1] * h - 5} className="fill-primary text-[9px]">train</text>
-      <text x={w - 10} y={h - valLoss[valLoss.length - 1] * h - 5} className="fill-accent text-[9px]">val</text>
+      <text x={w / 2} y={h + 20} textAnchor="middle" className="fill-muted-foreground text-[10px]">
+        Epoch
+      </text>
+      <text x={w - 12} y={h - trainLoss[trainLoss.length - 1] * h - 5} className="fill-primary text-[9px]">
+        train
+      </text>
+      <text x={w - 12} y={h - valLoss[valLoss.length - 1] * h - 5} className="fill-accent text-[9px]">
+        val
+      </text>
     </svg>
   );
 };
 
-const BarChart = () => {
-  const features = [
-    { name: "income", value: 0.92 },
-    { name: "age", value: 0.78 },
-    { name: "score", value: 0.65 },
-    { name: "hours", value: 0.45 },
-    { name: "rating", value: 0.3 },
-  ];
+const BarChart = ({ stageResult }: { stageResult: Record<string, unknown> | null }) => {
+  const featureScores = (stageResult?.feature_scores as Record<string, number> | undefined) || {};
+  const features = Object.entries(featureScores)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 6)
+    .map(([name, value]) => ({ name, value: Number(value) }));
+
+  if (features.length === 0) {
+    const selectedFeatures = (stageResult?.selected_features as string[] | undefined) || [];
+    if (selectedFeatures.length === 0) {
+      return <EmptyState message="Feature rankings will appear after feature engineering completes." />;
+    }
+    return (
+      <div className="space-y-2">
+        {selectedFeatures.slice(0, 6).map((feature, index) => (
+          <div key={feature} className="flex items-center gap-2">
+            <span className="w-20 text-right font-mono text-[11px] text-muted-foreground">{feature}</span>
+            <div className="h-5 flex-1 overflow-hidden rounded-sm bg-secondary">
+              <div
+                className="h-full rounded-sm"
+                style={{
+                  width: `${Math.max(100 - index * 12, 25)}%`,
+                  background: "linear-gradient(90deg, hsl(265 80% 60%), hsl(145 70% 50%))",
+                }}
+              />
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-2">
-      {features.map((f) => (
-        <div key={f.name} className="flex items-center gap-2">
-          <span className="w-14 text-[11px] text-muted-foreground font-mono text-right">{f.name}</span>
-          <div className="flex-1 h-5 bg-secondary rounded-sm overflow-hidden">
+      {features.map((feature) => (
+        <div key={feature.name} className="flex items-center gap-2">
+          <span className="w-20 text-right font-mono text-[11px] text-muted-foreground">{feature.name}</span>
+          <div className="h-5 flex-1 overflow-hidden rounded-sm bg-secondary">
             <div
               className="h-full rounded-sm"
-              style={{ width: `${f.value * 100}%`, background: "linear-gradient(90deg, hsl(265 80% 60%), hsl(145 70% 50%))" }}
+              style={{
+                width: `${Math.max(feature.value, 0.05) * 100}%`,
+                background: "linear-gradient(90deg, hsl(265 80% 60%), hsl(145 70% 50%))",
+              }}
             />
           </div>
-          <span className="text-[11px] font-mono text-foreground/70 w-8">{(f.value * 100).toFixed(0)}%</span>
+          <span className="w-10 font-mono text-[11px] text-foreground/70">{(feature.value * 100).toFixed(0)}%</span>
         </div>
       ))}
     </div>
   );
 };
 
-const DataTable = () => {
-  const cols = ["feature", "missing", "type", "action"];
-  const rows = [
-    ["age", "0%", "int", "scale"],
-    ["income", "2.1%", "float", "scale"],
-    ["city", "0%", "str", "encode"],
-    ["score", "5.3%", "float", "impute"],
-  ];
+const DataTable = ({ datasetSummary }: { datasetSummary: DatasetSummary | null }) => {
+  if (!datasetSummary) {
+    return <EmptyState message="Upload a dataset to inspect preprocessing inputs." />;
+  }
+
+  const rows = datasetSummary.column_names.slice(0, 8).map((columnName) => [
+    columnName,
+    `${((datasetSummary.missing_values[columnName] || 0) * 100).toFixed(1)}%`,
+    datasetSummary.column_types[columnName] || "unknown",
+  ]);
+
   return (
     <div className="overflow-x-auto">
-      <table className="w-full text-[11px] font-mono">
+      <table className="w-full font-mono text-[11px]">
         <thead>
           <tr className="border-b border-border/50">
-            {cols.map((c) => (
-              <th key={c} className="text-left py-1 px-2 text-muted-foreground font-medium">{c}</th>
+            {["feature", "missing", "type"].map((column) => (
+              <th key={column} className="px-2 py-1 text-left font-medium text-muted-foreground">
+                {column}
+              </th>
             ))}
           </tr>
         </thead>
         <tbody>
-          {rows.map((row, i) => (
-            <tr key={i} className="border-b border-border/20">
-              {row.map((cell, j) => (
-                <td key={j} className="py-1 px-2 text-foreground/80">{cell}</td>
+          {rows.map((row) => (
+            <tr key={row[0]} className="border-b border-border/20">
+              {row.map((cell) => (
+                <td key={cell} className="px-2 py-1 text-foreground/80">
+                  {cell}
+                </td>
               ))}
             </tr>
           ))}
@@ -119,27 +176,35 @@ const DataTable = () => {
   );
 };
 
-const ConfusionMatrix = () => {
-  const matrix = [[142, 8], [12, 138]];
-  const labels = ["Pos", "Neg"];
+const ConfusionMatrix = ({ metrics, stageResult }: { metrics: MetricsResponse | null; stageResult: Record<string, unknown> | null }) => {
+  const matrix = (metrics?.confusion_matrix || (stageResult?.confusion_matrix as number[][] | undefined) || []).slice(0, 2);
+  const labels = ["Pred 0", "Pred 1"];
+
+  if (matrix.length === 0) {
+    return <EmptyState message="Evaluation outputs will appear after the evaluation stage completes." />;
+  }
+
   return (
     <div className="flex flex-col items-center gap-1">
       <div className="flex gap-1">
-        <div className="w-10" />
-        {labels.map((l) => (
-          <div key={l} className="w-16 text-center text-[10px] text-muted-foreground">{l}</div>
+        <div className="w-14" />
+        {labels.map((label) => (
+          <div key={label} className="w-20 text-center text-[10px] text-muted-foreground">
+            {label}
+          </div>
         ))}
       </div>
-      {matrix.map((row, i) => (
-        <div key={i} className="flex gap-1 items-center">
-          <div className="w-10 text-[10px] text-muted-foreground text-right">{labels[i]}</div>
-          {row.map((val, j) => (
+      {matrix.map((row, index) => (
+        <div key={`row-${index}`} className="flex items-center gap-1">
+          <div className="w-14 text-right text-[10px] text-muted-foreground">Actual {index}</div>
+          {row.map((value, columnIndex) => (
             <div
-              key={j}
-              className={`w-16 h-14 rounded-md flex items-center justify-center font-mono text-sm font-semibold
-                ${i === j ? "bg-primary/20 text-primary" : "bg-destructive/10 text-destructive"}`}
+              key={`cell-${index}-${columnIndex}`}
+              className={`flex h-14 w-20 items-center justify-center rounded-md font-mono text-sm font-semibold ${
+                index === columnIndex ? "bg-primary/20 text-primary" : "bg-destructive/10 text-destructive"
+              }`}
             >
-              {val}
+              {value}
             </div>
           ))}
         </div>
@@ -148,33 +213,57 @@ const ConfusionMatrix = () => {
   );
 };
 
-const MetricsCard = () => {
-  const metrics = [
-    { label: "Accuracy", value: "93.4%" },
-    { label: "Precision", value: "94.7%" },
-    { label: "Recall", value: "92.0%" },
-    { label: "F1 Score", value: "93.3%" },
-  ];
+const MetricsCard = ({ metrics }: { metrics: MetricsResponse | null }) => {
+  if (!metrics) {
+    return <EmptyState message="Metrics will appear here after evaluation and deployment." />;
+  }
+
+  const cards =
+    metrics.task_type === "regression"
+      ? [
+          { label: "R2", value: formatMetric(metrics.r2, false) },
+          { label: "RMSE", value: formatMetric(metrics.rmse, false) },
+          { label: "MAE", value: formatMetric(metrics.mae, false) },
+          { label: "CV", value: formatMetric(metrics.best_score, false) },
+        ]
+      : [
+          { label: "Accuracy", value: formatMetric(metrics.accuracy, true) },
+          { label: "Precision", value: formatMetric(metrics.precision, true) },
+          { label: "Recall", value: formatMetric(metrics.recall, true) },
+          { label: "F1 Score", value: formatMetric(metrics.f1, true) },
+        ];
+
   return (
     <div className="grid grid-cols-2 gap-3">
-      {metrics.map((m) => (
-        <div key={m.label} className="glass-card p-3 text-center">
-          <div className="text-lg font-bold gradient-text">{m.value}</div>
-          <div className="text-[10px] text-muted-foreground mt-1">{m.label}</div>
+      {cards.map((metric) => (
+        <div key={metric.label} className="glass-card p-3 text-center">
+          <div className="gradient-text text-lg font-bold">{metric.value}</div>
+          <div className="mt-1 text-[10px] text-muted-foreground">{metric.label}</div>
         </div>
       ))}
     </div>
   );
 };
 
-export const StageVisualization = ({ stage }: { stage: PipelineStage }) => {
+export const StageVisualization = ({
+  stage,
+  stageResult,
+  datasetSummary,
+  metrics,
+}: StageVisualizationProps) => {
   const vizMap: Record<string, ReactNode> = {
-    heatmap: <Heatmap />,
-    lossCurve: <LossCurve />,
-    barChart: <BarChart />,
-    table: <DataTable />,
-    confusionMatrix: <ConfusionMatrix />,
-    metrics: <MetricsCard />,
+    heatmap: <Heatmap stageResult={stageResult} />,
+    lossCurve: <LossCurve stageResult={stageResult} />,
+    barChart: <BarChart stageResult={stageResult} />,
+    table: <DataTable datasetSummary={datasetSummary} />,
+    confusionMatrix: <ConfusionMatrix metrics={metrics} stageResult={stageResult} />,
+    metrics: <MetricsCard metrics={metrics} />,
   };
-  return <>{vizMap[stage.vizType] || null}</>;
+
+  return <>{vizMap[stage.vizType] || <EmptyState message="No visualization available for this stage yet." />}</>;
+};
+
+const formatMetric = (value: number | null | undefined, asPercent = true) => {
+  if (typeof value !== "number" || Number.isNaN(value)) return "Pending";
+  return asPercent ? `${(value * 100).toFixed(1)}%` : value.toFixed(3);
 };

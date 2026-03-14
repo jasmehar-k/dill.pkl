@@ -1,77 +1,90 @@
 import { useState } from "react";
 import { motion } from "framer-motion";
-import { Search, Sparkles, ChevronDown } from "lucide-react";
-
-const COLUMNS = ["price", "age", "income", "city", "score", "bedrooms", "sqft", "rating", "hours", "zip_code", "year_built", "lot_size"];
+import { ChevronDown, Loader2, Search, Sparkles } from "lucide-react";
+import type { DatasetColumn } from "@/lib/api";
 
 interface PredictionTargetProps {
   datasetLoaded: boolean;
+  columns: DatasetColumn[];
+  selectedColumn: string | null;
+  isSaving: boolean;
+  onSelect: (column: string) => Promise<void> | void;
+  onAutoDetect: () => void;
 }
 
-const PredictionTarget = ({ datasetLoaded }: PredictionTargetProps) => {
-  const [selectedColumn, setSelectedColumn] = useState<string | null>(null);
+const PredictionTarget = ({
+  datasetLoaded,
+  columns,
+  selectedColumn,
+  isSaving,
+  onSelect,
+  onAutoDetect,
+}: PredictionTargetProps) => {
   const [searchQuery, setSearchQuery] = useState("");
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [manualInput, setManualInput] = useState("");
 
   if (!datasetLoaded) return null;
 
-  const filtered = COLUMNS.filter((c) => c.toLowerCase().includes(searchQuery.toLowerCase()));
+  const filtered = columns.filter((column) =>
+    column.name.toLowerCase().includes(searchQuery.toLowerCase()),
+  );
 
-  const handleSelect = (col: string) => {
-    setSelectedColumn(col);
+  const activeColumn = columns.find((column) => column.name === selectedColumn) || null;
+
+  const handleSelect = async (column: string) => {
+    await onSelect(column);
     setIsDropdownOpen(false);
     setSearchQuery("");
     setManualInput("");
   };
 
-  const handleAutoDetect = () => {
-    setSelectedColumn("price");
-  };
-
   return (
     <motion.div
-      className="glass-card p-4 space-y-3"
+      className={`glass-card relative p-4 space-y-3 ${isDropdownOpen ? "z-30" : "z-10"}`}
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ delay: 0.2 }}
     >
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div>
           <h3 className="text-sm font-semibold text-foreground">What are you trying to predict?</h3>
-          <p className="text-[11px] text-muted-foreground mt-0.5">Select or type the column the model should predict.</p>
+          <p className="mt-0.5 text-[11px] text-muted-foreground">
+            Pick a target column from the uploaded dataset so the agentic pipeline can analyze and train against it.
+          </p>
         </div>
         <button
-          onClick={handleAutoDetect}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary/10 text-primary text-[11px] font-medium hover:bg-primary/20 transition-colors"
+          onClick={onAutoDetect}
+          disabled={columns.length === 0 || isSaving}
+          className="flex items-center gap-1.5 self-start rounded-lg bg-primary/10 px-3 py-1.5 text-[11px] font-medium text-primary transition-colors hover:bg-primary/20 disabled:cursor-not-allowed disabled:opacity-50"
         >
-          <Sparkles className="w-3 h-3" />
+          <Sparkles className="h-3 w-3" />
           Auto-detect target
         </button>
       </div>
 
-      <div className="flex gap-2">
-        {/* Searchable dropdown */}
+      <div className="flex flex-col gap-2 md:flex-row">
         <div className="relative flex-1">
           <button
-            onClick={() => setIsDropdownOpen(!isDropdownOpen)}
-            className="w-full flex items-center justify-between px-3 py-2 rounded-lg bg-secondary text-sm text-foreground hover:bg-surface-hover transition-colors"
+            onClick={() => setIsDropdownOpen((current) => !current)}
+            disabled={columns.length === 0 || isSaving}
+            className="flex w-full items-center justify-between rounded-lg bg-secondary px-3 py-2 text-sm text-foreground transition-colors hover:bg-surface-hover disabled:cursor-not-allowed disabled:opacity-50"
           >
             <span className={selectedColumn ? "text-foreground" : "text-muted-foreground"}>
               {selectedColumn || "Select column..."}
             </span>
-            <ChevronDown className="w-4 h-4 text-muted-foreground" />
+            <ChevronDown className="h-4 w-4 text-muted-foreground" />
           </button>
 
           {isDropdownOpen && (
             <motion.div
-              className="absolute z-20 top-full mt-1 w-full glass-card border border-border/50 rounded-lg overflow-hidden"
+              className="absolute top-full z-40 mt-1 w-full overflow-hidden rounded-lg border border-border/50 glass-card"
               initial={{ opacity: 0, y: -5 }}
               animate={{ opacity: 1, y: 0 }}
             >
-              <div className="p-2 border-b border-border/30">
-                <div className="flex items-center gap-2 px-2 py-1.5 rounded-md bg-secondary">
-                  <Search className="w-3.5 h-3.5 text-muted-foreground" />
+              <div className="border-b border-border/30 p-2">
+                <div className="flex items-center gap-2 rounded-md bg-secondary px-2 py-1.5">
+                  <Search className="h-3.5 w-3.5 text-muted-foreground" />
                   <input
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
@@ -81,48 +94,64 @@ const PredictionTarget = ({ datasetLoaded }: PredictionTargetProps) => {
                   />
                 </div>
               </div>
-              <div className="max-h-40 overflow-y-auto scrollbar-thin p-1">
-                {filtered.map((col) => (
+              <div className="scrollbar-thin max-h-48 overflow-y-auto p-1">
+                {filtered.map((column) => (
                   <button
-                    key={col}
-                    onClick={() => handleSelect(col)}
-                    className="w-full text-left px-3 py-1.5 text-sm font-mono text-foreground rounded-md hover:bg-secondary transition-colors"
+                    key={column.name}
+                    onClick={() => void handleSelect(column.name)}
+                    className="w-full rounded-md px-3 py-2 text-left transition-colors hover:bg-secondary"
                   >
-                    {col}
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="text-sm font-mono text-foreground">{column.name}</span>
+                      <span className="text-[10px] text-muted-foreground">
+                        {column.dtype}
+                        {column.missing_pct > 0 ? ` • ${(column.missing_pct * 100).toFixed(1)}% missing` : ""}
+                      </span>
+                    </div>
                   </button>
                 ))}
                 {filtered.length === 0 && (
-                  <p className="text-xs text-muted-foreground px-3 py-2">No columns found</p>
+                  <p className="px-3 py-2 text-xs text-muted-foreground">No columns found</p>
                 )}
               </div>
             </motion.div>
           )}
         </div>
 
-        {/* Manual input */}
         <input
           value={manualInput}
           onChange={(e) => setManualInput(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter" && manualInput.trim()) {
-              handleSelect(manualInput.trim());
+              void handleSelect(manualInput.trim());
             }
           }}
           placeholder="Or type column name..."
-          className="flex-1 px-3 py-2 rounded-lg bg-secondary text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary/50"
+          className="flex-1 rounded-lg bg-secondary px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary/50"
         />
       </div>
 
-      {selectedColumn && (
-        <motion.div
-          className="flex items-center gap-2 text-[11px] font-mono"
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-        >
-          <span className="text-muted-foreground">Target:</span>
-          <span className="px-2 py-0.5 rounded-md bg-accent/10 text-accent font-semibold">{selectedColumn}</span>
-        </motion.div>
-      )}
+      <div className="flex flex-wrap items-center gap-2 text-[11px] font-mono">
+        {selectedColumn ? (
+          <>
+            <span className="text-muted-foreground">Target:</span>
+            <span className="rounded-md bg-accent/10 px-2 py-0.5 font-semibold text-accent">{selectedColumn}</span>
+            {activeColumn && (
+              <span className="rounded-md bg-secondary px-2 py-0.5 text-muted-foreground">
+                {activeColumn.is_numeric ? "numeric" : "categorical"} • {activeColumn.dtype}
+              </span>
+            )}
+            {isSaving && (
+              <span className="flex items-center gap-1 text-primary">
+                <Loader2 className="h-3 w-3 animate-spin" />
+                saving target
+              </span>
+            )}
+          </>
+        ) : (
+          <span className="text-muted-foreground">{columns.length} dataset columns available for selection</span>
+        )}
+      </div>
     </motion.div>
   );
 };

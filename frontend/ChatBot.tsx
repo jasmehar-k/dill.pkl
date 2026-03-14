@@ -1,124 +1,146 @@
-import { useState, useRef, useEffect } from "react";
-import { motion, AnimatePresence } from "framer-motion";
-import { MessageCircle, X, Send, Bot, User } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { AnimatePresence, motion } from "framer-motion";
+import { Bot, MessageCircle, Send, User, X } from "lucide-react";
+import type { MetricsResponse, TaskType } from "@/lib/api";
 
 interface Message {
   role: "user" | "assistant";
   content: string;
 }
 
-const QUICK_RESPONSES: Record<string, string> = {
-  "what does preprocessing do": "Preprocessing prepares raw data for modeling. It handles missing values (imputation), encodes categorical variables (one-hot, label encoding), scales numerical features (StandardScaler, MinMaxScaler), and splits data into train/test sets.",
-  "why is my model overfitting": "Overfitting happens when your model learns noise instead of patterns. Common fixes:\n• Increase training data\n• Use regularization (L1/L2)\n• Reduce model complexity\n• Apply dropout\n• Use cross-validation",
-  "what does this loss curve mean": "The loss curve shows how your model's error decreases during training. A good curve:\n• Training loss decreases steadily\n• Validation loss follows but stays slightly higher\n\n⚠️ If validation loss starts increasing, that's overfitting.",
-  "what is a confusion matrix": "A confusion matrix shows classifier performance:\n• True Positives (TP): Correctly predicted positive\n• True Negatives (TN): Correctly predicted negative\n• False Positives (FP): Type I error\n• False Negatives (FN): Type II error",
-  "what is feature engineering": "Feature engineering creates new meaningful features from raw data:\n• Combining features (age × income)\n• Extracting date parts\n• Binning continuous variables\n• Text vectorization (TF-IDF)",
-};
+interface ChatBotProps {
+  datasetName: string | null;
+  targetColumn: string | null;
+  taskType: TaskType;
+  activeStageId: string | null;
+  stageLogs: Record<string, string[]>;
+  metrics: MetricsResponse | null;
+}
 
-const findResponse = (input: string): string => {
-  const lower = input.toLowerCase().trim();
-  for (const [key, val] of Object.entries(QUICK_RESPONSES)) {
-    if (lower.includes(key) || key.includes(lower)) return val;
-  }
-  if (lower.includes("preprocess")) return QUICK_RESPONSES["what does preprocessing do"];
-  if (lower.includes("overfit")) return QUICK_RESPONSES["why is my model overfitting"];
-  if (lower.includes("loss")) return QUICK_RESPONSES["what does this loss curve mean"];
-  if (lower.includes("confusion")) return QUICK_RESPONSES["what is a confusion matrix"];
-  if (lower.includes("feature")) return QUICK_RESPONSES["what is feature engineering"];
-  return "I can help explain ML pipeline concepts! Try asking about:\n• Preprocessing\n• Overfitting\n• Loss curves\n• Confusion matrices\n• Feature engineering";
-};
-
-const ChatBot = () => {
+const ChatBot = ({ datasetName, targetColumn, taskType, activeStageId, stageLogs, metrics }: ChatBotProps) => {
   const [isOpen, setIsOpen] = useState(false);
   const [messages, setMessages] = useState<Message[]>([
-    { role: "assistant", content: "Hi! 🥒 I'm your ML pipeline assistant. Ask me anything about the pipeline stages!" },
+    {
+      role: "assistant",
+      content: "I can explain what the pipeline is doing as your dataset moves through each stage.",
+    },
   ]);
   const [input, setInput] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  const contextSummary = useMemo(() => {
+    const parts = [];
+    if (datasetName) parts.push(`Dataset: ${datasetName}`);
+    if (targetColumn) parts.push(`Target: ${targetColumn}`);
+    parts.push(`Task: ${taskType}`);
+    if (activeStageId) parts.push(`Active stage: ${activeStageId}`);
+    if (metrics?.performance_summary) parts.push(metrics.performance_summary);
+    return parts.join(" | ");
+  }, [activeStageId, datasetName, metrics?.performance_summary, targetColumn, taskType]);
 
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
   }, [messages]);
 
+  useEffect(() => {
+    setMessages((current) => {
+      const next = [...current];
+      next[0] = {
+        role: "assistant",
+        content: contextSummary || "I can explain what the pipeline is doing as your dataset moves through each stage.",
+      };
+      return next;
+    });
+  }, [contextSummary]);
+
   const handleSend = () => {
     if (!input.trim()) return;
+
     const userMsg: Message = { role: "user", content: input.trim() };
     setMessages((prev) => [...prev, userMsg]);
     setInput("");
+
     setTimeout(() => {
-      const response = findResponse(userMsg.content);
+      const response = findResponse(userMsg.content, {
+        datasetName,
+        targetColumn,
+        taskType,
+        activeStageId,
+        stageLogs,
+        metrics,
+      });
       setMessages((prev) => [...prev, { role: "assistant", content: response }]);
-    }, 500);
+    }, 350);
   };
 
   return (
     <>
       <motion.button
-        className="fixed bottom-6 right-6 z-50 w-14 h-14 rounded-full bg-primary flex items-center justify-center glow-purple hover:scale-110 transition-transform"
-        onClick={() => setIsOpen(!isOpen)}
+        className="glow-purple fixed bottom-6 right-6 z-50 flex h-14 w-14 items-center justify-center rounded-full bg-primary transition-transform hover:scale-110"
+        onClick={() => setIsOpen((current) => !current)}
         whileTap={{ scale: 0.9 }}
       >
-        {isOpen ? <X className="w-6 h-6 text-primary-foreground" /> : <MessageCircle className="w-6 h-6 text-primary-foreground" />}
+        {isOpen ? <X className="h-6 w-6 text-primary-foreground" /> : <MessageCircle className="h-6 w-6 text-primary-foreground" />}
       </motion.button>
 
       <AnimatePresence>
         {isOpen && (
           <motion.div
-            className="fixed bottom-24 right-6 z-50 w-80 sm:w-96 h-[28rem] glass-card border border-border/50 rounded-xl overflow-hidden flex flex-col"
+            className="glass-card fixed bottom-24 right-6 z-50 flex h-[28rem] w-80 flex-col overflow-hidden rounded-xl border border-border/50 sm:w-96"
             initial={{ opacity: 0, y: 20, scale: 0.9 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 20, scale: 0.9 }}
             transition={{ type: "spring", damping: 25 }}
           >
-            <div className="px-4 py-3 border-b border-border/30 flex items-center gap-2">
-              <Bot className="w-4 h-4 text-accent" />
+            <div className="flex items-center gap-2 border-b border-border/30 px-4 py-3">
+              <Bot className="h-4 w-4 text-accent" />
               <span className="text-sm font-semibold text-foreground">dill.pkl Assistant</span>
-              <span className="text-[10px] font-mono text-accent ml-auto">🥒 online</span>
+              <span className="ml-auto text-[10px] font-mono text-accent">online</span>
             </div>
 
-            <div ref={scrollRef} className="flex-1 overflow-y-auto scrollbar-thin p-3 space-y-3">
-              {messages.map((msg, i) => (
+            <div ref={scrollRef} className="scrollbar-thin flex-1 space-y-3 overflow-y-auto p-3">
+              {messages.map((message, index) => (
                 <motion.div
-                  key={i}
+                  key={`${message.role}-${index}`}
                   initial={{ opacity: 0, y: 5 }}
                   animate={{ opacity: 1, y: 0 }}
-                  className={`flex gap-2 ${msg.role === "user" ? "justify-end" : "justify-start"}`}
+                  className={`flex gap-2 ${message.role === "user" ? "justify-end" : "justify-start"}`}
                 >
-                  {msg.role === "assistant" && (
-                    <div className="w-6 h-6 rounded-full bg-accent/20 flex items-center justify-center shrink-0 mt-0.5">
-                      <Bot className="w-3 h-3 text-accent" />
+                  {message.role === "assistant" && (
+                    <div className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-accent/20">
+                      <Bot className="h-3 w-3 text-accent" />
                     </div>
                   )}
                   <div
-                    className={`max-w-[80%] rounded-xl px-3 py-2 text-[12px] leading-relaxed whitespace-pre-line ${
-                      msg.role === "user" ? "bg-primary/20 text-foreground" : "bg-secondary text-secondary-foreground"
+                    className={`max-w-[80%] whitespace-pre-line rounded-xl px-3 py-2 text-[12px] leading-relaxed ${
+                      message.role === "user" ? "bg-primary/20 text-foreground" : "bg-secondary text-secondary-foreground"
                     }`}
                   >
-                    {msg.content}
+                    {message.content}
                   </div>
-                  {msg.role === "user" && (
-                    <div className="w-6 h-6 rounded-full bg-primary/20 flex items-center justify-center shrink-0 mt-0.5">
-                      <User className="w-3 h-3 text-primary" />
+                  {message.role === "user" && (
+                    <div className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary/20">
+                      <User className="h-3 w-3 text-primary" />
                     </div>
                   )}
                 </motion.div>
               ))}
             </div>
 
-            <div className="p-3 border-t border-border/30">
+            <div className="border-t border-border/30 p-3">
               <div className="flex gap-2">
                 <input
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
                   onKeyDown={(e) => e.key === "Enter" && handleSend()}
-                  placeholder="Ask about ML pipeline..."
-                  className="flex-1 bg-secondary rounded-lg px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary/50"
+                  placeholder="Ask about this dataset or stage..."
+                  className="flex-1 rounded-lg bg-secondary px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary/50"
                 />
                 <button
                   onClick={handleSend}
-                  className="w-9 h-9 rounded-lg bg-primary flex items-center justify-center hover:bg-primary/80 transition-colors"
+                  className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary transition-colors hover:bg-primary/80"
                 >
-                  <Send className="w-4 h-4 text-primary-foreground" />
+                  <Send className="h-4 w-4 text-primary-foreground" />
                 </button>
               </div>
             </div>
@@ -127,6 +149,68 @@ const ChatBot = () => {
       </AnimatePresence>
     </>
   );
+};
+
+const findResponse = (
+  input: string,
+  context: {
+    datasetName: string | null;
+    targetColumn: string | null;
+    taskType: TaskType;
+    activeStageId: string | null;
+    stageLogs: Record<string, string[]>;
+    metrics: MetricsResponse | null;
+  },
+) => {
+  const lower = input.toLowerCase().trim();
+
+  if (lower.includes("dataset")) {
+    return context.datasetName
+      ? `The current dataset is ${context.datasetName}.`
+      : "No dataset is loaded yet.";
+  }
+
+  if (lower.includes("target")) {
+    return context.targetColumn
+      ? `The current target column is ${context.targetColumn}.`
+      : "A target column has not been selected yet.";
+  }
+
+  if (lower.includes("task")) {
+    return `The pipeline is configured for a ${context.taskType} task.`;
+  }
+
+  if (lower.includes("stage") || lower.includes("status")) {
+    if (!context.activeStageId) {
+      return "The pipeline is idle right now. Upload a dataset and run the pipeline to see active stage updates.";
+    }
+    const stageLogs = context.stageLogs[context.activeStageId] || [];
+    const latestLog = stageLogs[stageLogs.length - 1];
+    return latestLog
+      ? `The active stage is ${context.activeStageId}. Latest log: ${latestLog}`
+      : `The active stage is ${context.activeStageId}.`;
+  }
+
+  if (lower.includes("metric") || lower.includes("accuracy") || lower.includes("f1") || lower.includes("r2")) {
+    if (!context.metrics) {
+      return "Metrics are not available yet. They appear after evaluation finishes.";
+    }
+    return context.metrics.performance_summary || "Metrics are available in the results panel.";
+  }
+
+  if (lower.includes("log")) {
+    const activeLogs = context.activeStageId ? context.stageLogs[context.activeStageId] || [] : [];
+    if (activeLogs.length === 0) {
+      return "No logs are available for the active stage yet.";
+    }
+    return `Recent ${context.activeStageId} logs:\n${activeLogs.slice(-3).join("\n")}`;
+  }
+
+  return [
+    context.datasetName ? `Dataset: ${context.datasetName}` : "No dataset loaded yet.",
+    context.targetColumn ? `Target: ${context.targetColumn}` : "Select a target column to continue.",
+    context.activeStageId ? `Active stage: ${context.activeStageId}` : "The pipeline is waiting to start.",
+  ].join("\n");
 };
 
 export default ChatBot;

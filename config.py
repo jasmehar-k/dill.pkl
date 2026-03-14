@@ -1,4 +1,4 @@
-"""Configuration management for the Blog Generator application.
+"""Configuration management for the AutoML Pipeline application.
 
 This module provides centralized configuration using Pydantic Settings
 for environment variable validation and type safety.
@@ -28,14 +28,11 @@ class Settings(BaseSettings):
     )
 
     # Application settings
-    app_name: str = Field(default="Blog Generator", description="Application name")
+    app_name: str = Field(default="dill.pkl AutoML", description="Application name")
     app_env: str = Field(default="development", description="Environment: development, staging, production")
     log_level: str = Field(default="INFO", description="Logging level")
 
-    # Topic settings
-    default_topic: str = Field(default="AI in 2026", description="Default blog topic")
-
-    # OpenRouter API settings
+    # OpenRouter API settings (optional for local processing)
     openrouter_api_key: Optional[str] = Field(default=None, description="OpenRouter API key for LLM calls")
     model_name: str = Field(default="arcee-ai/trinity-large-preview:free", description="LLM model to use")
     model_temperature: float = Field(default=0.7, description="LLM temperature (0.0-1.0)")
@@ -44,6 +41,11 @@ class Settings(BaseSettings):
     # Production settings
     request_timeout: int = Field(default=60, description="HTTP request timeout in seconds")
     max_retries: int = Field(default=3, description="Maximum number of retries for failed requests")
+
+    # Pipeline settings
+    default_test_size: float = Field(default=0.2, description="Default test set proportion")
+    default_random_state: int = Field(default=42, description="Default random seed")
+    default_cv_folds: int = Field(default=5, description="Default cross-validation folds")
 
 
 settings = Settings()

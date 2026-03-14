@@ -1,12 +1,12 @@
-"""Custom exceptions for the Blog Generator application.
+"""Custom exceptions for the AutoML Pipeline application.
 
 This module defines exception classes used throughout the application
 for consistent error handling and reporting.
 """
 
 
-class BlogGenerationError(Exception):
-    """Base exception for all blog generation errors.
+class AutoMLError(Exception):
+    """Base exception for all AutoML errors.
 
     This is the root exception class from which all other application
     exceptions inherit.
@@ -23,7 +23,7 @@ class BlogGenerationError(Exception):
         self.details = details or {}
 
 
-class AgentExecutionError(BlogGenerationError):
+class AgentExecutionError(AutoMLError):
     """Exception raised when an agent fails to execute.
 
     This exception is raised when an agent encounters an error during
@@ -47,7 +47,7 @@ class AgentExecutionError(BlogGenerationError):
         self.agent_name = agent_name
 
 
-class ConfigurationError(BlogGenerationError):
+class ConfigurationError(AutoMLError):
     """Exception raised when configuration is invalid or missing.
 
     This exception is raised when required configuration values
@@ -71,7 +71,7 @@ class ConfigurationError(BlogGenerationError):
         self.config_key = config_key
 
 
-class MemoryError(BlogGenerationError):
+class MemoryError(AutoMLError):
     """Exception raised when memory operations fail.
 
     This exception is raised when there are issues with memory
@@ -79,7 +79,7 @@ class MemoryError(BlogGenerationError):
     """
 
 
-class PipelineError(BlogGenerationError):
+class PipelineError(AutoMLError):
     """Exception raised when the agent pipeline fails.
 
     This exception is raised when the orchestration pipeline
