@@ -128,6 +128,8 @@ const StageDetailPanel = ({
                     <p className="text-sm leading-relaxed text-secondary-foreground">{aboutText}</p>
                   </div>
 
+                  <StageSummaryCard stage={stage} stageResult={stageResult} />
+
                   {isResults && (explanationSummary || pipelineSummary || explanationBullets.length > 0) && (
                     <div className="space-y-3">
                       <h3 className="text-sm font-medium text-accent">Pipeline recap</h3>
@@ -231,29 +233,7 @@ const StageDetailPanel = ({
                   ) : (
                     <>
                       {!isModelSelection && !isResults && (
-                        <div className="space-y-2">
-                          <h3 className="text-sm font-medium text-accent">Visualization</h3>
-                          <div className="glass-card p-4">
-                            <StageVisualization
-                              stage={stage}
-                              stageResult={stageResult}
-                              datasetSummary={datasetSummary}
-                              metrics={metrics}
-                            />
-                          </div>
-                        </div>
-                      )}
-
-                      {!isModelSelection && !isResults && (
-                        <>
-                          <StageLogs stage={stage} stageLogs={stageLogs} />
-                          <div className="space-y-2">
-                            <h3 className="text-sm font-medium text-accent">Code</h3>
-                            <pre className="glass-card overflow-x-auto whitespace-pre-wrap p-4 font-mono text-[12px] leading-relaxed text-foreground/80">
-                              {stage.codeSnippet}
-                            </pre>
-                          </div>
-                        </>
+                        <StageLogs stage={stage} stageLogs={stageLogs} stageResult={stageResult} metrics={metrics} />
                       )}
                     </>
                   )}
@@ -305,37 +285,96 @@ const DatasetPreviewCard = ({
   </div>
 );
 
-const StageLogs = ({
+const StageLogs = ({ stage, stageLogs, stageResult, metrics }: { stage: PipelineStage; stageLogs: string[]; stageResult?: Record<string, unknown> | null; metrics?: MetricsResponse | null }) => {
+  if (stage.id === "training") {
+    const model = (stageResult?.model_name as string | undefined) || "the selected model";
+    const trainRows = stageResult?.train_size as number | undefined;
+    const testRows = stageResult?.test_size as number | undefined;
+    const cv = metrics?.best_score ?? (stageResult?.best_score as number | undefined);
+    const test = metrics?.r2 ?? (stageResult?.test_score as number | undefined);
+    return (
+      <div className="space-y-2">
+        <h3 className="text-sm font-medium text-accent">How the model was trained</h3>
+        <div className="glass-card space-y-2 p-4 text-sm leading-relaxed text-secondary-foreground">
+          <p>
+            The system evaluated several models and trained {model} because it performed best on the dataset. It learned from{" "}
+            {trainRows ? trainRows.toLocaleString() : "the"} training rows and kept {testRows ? testRows.toLocaleString() : "some"} rows aside for testing.
+          </p>
+          <ul className="ml-4 list-disc space-y-1">
+            <li>Used cross-validation to check performance: {typeof cv === "number" ? cv.toFixed(3) : "n/a"} R².</li>
+            <li>Held-out test performance: {typeof test === "number" ? test.toFixed(3) : "n/a"} R².</li>
+            <li>Learned how features relate to the target to make price predictions.</li>
+          </ul>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-2">
+      <h3 className="text-sm font-medium text-accent">Stage logs</h3>
+      <div className="glass-card max-h-48 space-y-2 overflow-y-auto p-4 font-mono text-[11px] scrollbar-thin">
+        {stageLogs.length > 0 ? (
+          stageLogs.map((log, index) => (
+            <p
+              key={`${stage.id}-${index}`}
+              className={`whitespace-pre-wrap leading-relaxed ${
+                log.includes(" summary:")
+                  ? "text-accent"
+                  : log.includes(" overall:")
+                    ? "text-primary"
+                    : "text-foreground/75"
+              }`}
+            >
+              {log}
+            </p>
+          ))
+        ) : (
+          <p className="text-muted-foreground">No logs recorded for this stage yet.</p>
+        )}
+      </div>
+    </div>
+  );
+};
+
+const StageSummaryCard = ({
   stage,
-  stageLogs,
+  stageResult,
 }: {
   stage: PipelineStage;
-  stageLogs: string[];
-}) => (
-  <div className="space-y-2">
-    <h3 className="text-sm font-medium text-accent">Stage logs</h3>
-    <div className="glass-card max-h-48 space-y-2 overflow-y-auto p-4 font-mono text-[11px] scrollbar-thin">
-      {stageLogs.length > 0 ? (
-        stageLogs.map((log, index) => (
-          <p
-            key={`${stage.id}-${index}`}
-            className={`whitespace-pre-wrap leading-relaxed ${
-              log.includes(" summary:")
-                ? "text-accent"
-                : log.includes(" overall:")
-                  ? "text-primary"
-                  : "text-foreground/75"
-            }`}
-          >
-            {log}
-          </p>
-        ))
-      ) : (
-        <p className="text-muted-foreground">No logs recorded for this stage yet.</p>
-      )}
+  stageResult: Record<string, unknown> | null;
+}) => {
+  const agentSummary = stageResult?._agent_summary as
+    | { step_summary?: string; decisions_made?: string[] }
+    | undefined;
+
+  const summary =
+    agentSummary?.step_summary ||
+    (stageResult?.explanation_details as { summary?: string } | undefined)?.summary ||
+    (stageResult?.explanation as string | undefined) ||
+    "";
+
+  const decisions =
+    (agentSummary?.decisions_made as string[] | undefined)?.filter(Boolean)?.slice(0, 3) || [];
+
+  if (!summary && decisions.length === 0) return null;
+
+  return (
+    <div className="space-y-2">
+      <h3 className="text-sm font-medium text-accent">What happened in this stage</h3>
+      <div className="glass-card space-y-2 p-4 text-sm leading-relaxed text-secondary-foreground">
+        {summary && <p className="text-foreground">{summary}</p>}
+        {decisions.length > 0 && (
+          <ul className="ml-4 list-disc space-y-1">
+            {decisions.map((item) => (
+              <li key={item}>{item}</li>
+            ))}
+          </ul>
+        )}
+      </div>
     </div>
-  </div>
-);
+  );
+};
 
 const getPanelWidthClass = (stageId: string) => {
   if (stageId === "features") return "max-w-[min(96vw,1200px)]";
@@ -385,9 +424,8 @@ const buildHighlights = (
       return [{ label: "Selected model", value: String(stageResult?.selected_model ?? "Pending") }];
     case "training":
       return [
-        { label: "Model", value: String(stageResult?.model_name ?? metrics?.model_name ?? "Pending") },
-        { label: "Best CV", value: formatMetric(stageResult?.best_score as number | undefined, false) },
-        { label: "Test score", value: formatMetric(stageResult?.test_score as number | undefined, false) },
+        { label: "Selected model", value: String(stageResult?.model_name ?? metrics?.model_name ?? "Pending") },
+        { label: "Training time", value: formatDuration(stageResult?.training_time as number | undefined) },
       ];
     case "loss":
       return [
@@ -692,6 +730,14 @@ const buildModelSelectionPanel = (stageResult: Record<string, unknown> | null) =
 const formatMetric = (value: number | null | undefined, asPercent = false) => {
   if (typeof value !== "number" || Number.isNaN(value)) return "Pending";
   return asPercent ? `${(value * 100).toFixed(1)}%` : value.toFixed(3);
+};
+
+const formatDuration = (seconds: number | undefined) => {
+  if (typeof seconds !== "number" || Number.isNaN(seconds)) return "Pending";
+  if (seconds < 60) return `${seconds.toFixed(1)}s`;
+  const minutes = Math.floor(seconds / 60);
+  const rem = Math.round(seconds % 60);
+  return `${minutes}m ${rem}s`;
 };
 
 const formatLast = (values?: number[]) => {

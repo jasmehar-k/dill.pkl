@@ -185,6 +185,8 @@ def summarize_stage_result(stage: str, result: Optional[dict[str, Any]]) -> Opti
             "train_loss",
             "val_loss",
             "best_epoch",
+            "feature_count",
+            "training_time",
         ],
         "model_selection": [
             "selected_model",
