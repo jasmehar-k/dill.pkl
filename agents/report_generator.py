@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import base64
 import io
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 import numpy as np
@@ -59,7 +59,7 @@ class ReportGenerator(BaseAgent):
         )
 
         context = {
-            "generated_at": datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC"),
+            "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
             "pipeline_id": pipeline_id,
             "dataset_name": dataset_name or "unknown",
             "target_column": target_column or "unknown",
