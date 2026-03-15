@@ -50,6 +50,7 @@ class PreprocessorAgent(BaseAgent):
         target_column: str,
         test_size: float = 0.2,
         random_state: int = 42,
+        config_overrides: Optional[dict[str, Any]] = None,
     ) -> dict[str, Any]:
         try:
             logger.info("Starting preprocessing of dataset with %s rows", len(df))
@@ -68,6 +69,16 @@ class PreprocessorAgent(BaseAgent):
                 "test_size": test_size,
                 "random_state": random_state,
             })
+            if config_overrides:
+                config.update(config_overrides)
+            forced_keep_columns = {
+                str(column) for column in config.get("force_keep_columns", [])
+                if str(column)
+            }
+            forced_drop_columns = [
+                str(column) for column in config.get("force_drop_columns", [])
+                if str(column)
+            ]
 
             initial_types = detect_column_types(X_raw)
             X_expanded, datetime_expansion_map = expand_datetime_columns(
@@ -82,7 +93,7 @@ class PreprocessorAgent(BaseAgent):
             missing_decision = choose_missing_value_strategy(
                 X_expanded,
                 config=config,
-                protected_columns=set(),
+                protected_columns=forced_keep_columns,
             )
 
             drop_records = self._merge_drop_records(
@@ -98,6 +109,23 @@ class PreprocessorAgent(BaseAgent):
                     for column in missing_decision.get("drop_columns", [])
                 ],
             )
+            dropped_column_names = [item["column"] for item in drop_records]
+            if forced_keep_columns:
+                drop_records = [
+                    item for item in drop_records
+                    if item["column"] not in forced_keep_columns
+                ]
+            if forced_drop_columns:
+                existing = {item["column"] for item in drop_records}
+                for column in forced_drop_columns:
+                    if column in existing or column not in X_expanded.columns:
+                        continue
+                    drop_records.append({
+                        "column": column,
+                        "reason": "manual",
+                        "detail": "column was manually dropped by the revision agent",
+                    })
+
             dropped_column_names = [item["column"] for item in drop_records]
 
             X_reduced = X_expanded.drop(columns=dropped_column_names, errors="ignore")
@@ -320,17 +348,18 @@ class PreprocessorAgent(BaseAgent):
         )
 
         rare_category_maps: dict[str, list[str]] = {}
-        for column in categorical_columns:
-            if column not in train_base.columns:
-                continue
-            rare_values = detect_rare_categories(
-                train_base[column],
-                rare_fraction=float(config["rare_category_fraction"]),
-                min_levels=int(config["rare_category_min_levels"]),
-                max_group_fraction=float(config["rare_category_max_group_fraction"]),
-            )
-            if rare_values:
-                rare_category_maps[column] = rare_values
+        if bool(config.get("rare_category_grouping", True)):
+            for column in categorical_columns:
+                if column not in train_base.columns:
+                    continue
+                rare_values = detect_rare_categories(
+                    train_base[column],
+                    rare_fraction=float(config["rare_category_fraction"]),
+                    min_levels=int(config["rare_category_min_levels"]),
+                    max_group_fraction=float(config["rare_category_max_group_fraction"]),
+                )
+                if rare_values:
+                    rare_category_maps[column] = rare_values
 
         train_base = self._apply_rare_category_grouping(train_base, rare_category_maps)
         test_base = self._apply_rare_category_grouping(test_base, rare_category_maps)

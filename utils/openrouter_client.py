@@ -5,19 +5,36 @@ from __future__ import annotations
 import json
 import os
 import re
+import threading
+import time
+import uuid
 from typing import Any, Optional
-from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
 
-from config import get_openrouter_api_key, settings
+import httpx
+
+from config import get_openrouter_api_key, get_openrouter_model_candidates, settings
 from utils.logger import get_logger
 
 
 class OpenRouterClient:
     """Small OpenRouter client with graceful fallback behavior."""
 
-    def __init__(self, logger_name: str = "OpenRouter") -> None:
+    _shared_client: Optional[httpx.Client] = None
+    _client_lock = threading.Lock()
+
+    def __init__(
+        self,
+        logger_name: str = "OpenRouter",
+        *,
+        model_name: Optional[str] = None,
+        model_fallbacks: Optional[list[str]] = None,
+    ) -> None:
         self._logger = get_logger(f"{logger_name}.OpenRouter")
+        self._model_name_override = model_name.strip() if isinstance(model_name, str) and model_name.strip() else None
+        self._model_fallbacks_override = [
+            item.strip() for item in (model_fallbacks or [])
+            if isinstance(item, str) and item.strip()
+        ]
 
     def is_enabled(self) -> bool:
         """Return whether OpenRouter is configured."""
@@ -30,11 +47,85 @@ class OpenRouterClient:
         *,
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
+        request_id: Optional[str] = None,
     ) -> str:
         """Generate a plain-text response from OpenRouter."""
         api_key = get_openrouter_api_key()
+        last_error: Optional[RuntimeError] = None
+        models_tried: list[str] = []
+        request_id = request_id or uuid.uuid4().hex[:12]
+
+        for model_name in self._get_model_candidates():
+            models_tried.append(model_name)
+            for attempt in range(1, max(settings.max_retries, 1) + 1):
+                try:
+                    body = self._request_completion(
+                        api_key=api_key,
+                        model_name=model_name,
+                        system_prompt=system_prompt,
+                        user_prompt=user_prompt,
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                        request_id=request_id,
+                        attempt=attempt,
+                    )
+                    payload = json.loads(body)
+                    return self._extract_text_from_payload(payload)
+                except RuntimeError as exc:
+                    last_error = exc
+                    if self._should_retry(exc, attempt):
+                        self._logger.warning(
+                            "OpenRouter attempt %s/%s failed for model %s: %s",
+                            attempt,
+                            max(settings.max_retries, 1),
+                            model_name,
+                            exc,
+                        )
+                        time.sleep(self._retry_delay_seconds(attempt))
+                        continue
+
+                    self._logger.warning(
+                        "OpenRouter failed for model %s on attempt %s/%s: %s",
+                        model_name,
+                        attempt,
+                        max(settings.max_retries, 1),
+                        exc,
+                    )
+                    break
+
+        attempted = ", ".join(models_tried) or settings.model_name
+        detail = str(last_error) if last_error else "unknown error"
+        raise RuntimeError(f"OpenRouter failed for models [{attempted}]. Last error: {detail}")
+
+    def _get_model_candidates(self) -> list[str]:
+        """Return model candidates for this client, allowing per-client overrides."""
+        if not self._model_name_override and not self._model_fallbacks_override:
+            return get_openrouter_model_candidates()
+
+        raw_candidates = [self._model_name_override or settings.model_name, *self._model_fallbacks_override]
+        candidates: list[str] = []
+        for item in raw_candidates:
+            model_name = (item or "").strip()
+            if not model_name or model_name in candidates:
+                continue
+            candidates.append(model_name)
+        return candidates
+
+    def _request_completion(
+        self,
+        *,
+        api_key: str,
+        model_name: str,
+        system_prompt: str,
+        user_prompt: str,
+        temperature: Optional[float],
+        max_tokens: Optional[int],
+        request_id: str,
+        attempt: int,
+    ) -> str:
+        """Execute a single OpenRouter completion request."""
         payload = {
-            "model": settings.model_name,
+            "model": model_name,
             "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
@@ -42,29 +133,86 @@ class OpenRouterClient:
             "temperature": settings.model_temperature if temperature is None else temperature,
             "max_tokens": settings.model_max_tokens if max_tokens is None else max_tokens,
         }
-
-        request = Request(
-            url="https://openrouter.ai/api/v1/chat/completions",
-            data=json.dumps(payload).encode("utf-8"),
-            headers={
-                "Content-Type": "application/json",
-                "HTTP-Referer": "http://localhost",
-                "X-Title": settings.app_name,
-            },
-            method="POST",
+        client = self._get_shared_client()
+        started = time.perf_counter()
+        self._logger.info(
+            "OPENROUTER CALL START request_id=%s model=%s attempt=%s",
+            request_id,
+            model_name,
+            attempt,
         )
-        request.add_unredirected_header("Authorization", f"Bearer {api_key}")
 
         try:
-            with urlopen(request, timeout=settings.request_timeout) as response:
-                body = response.read().decode("utf-8")
-        except HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="ignore")
-            raise RuntimeError(f"OpenRouter HTTP error {exc.code}: {detail}") from exc
-        except URLError as exc:
-            raise RuntimeError(f"OpenRouter connection failed: {exc.reason}") from exc
+            response = client.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                json=payload,
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                    "HTTP-Referer": "http://localhost",
+                    "X-Title": settings.app_name,
+                },
+            )
+            response.raise_for_status()
+            duration_ms = (time.perf_counter() - started) * 1000
+            self._logger.info(
+                "OPENROUTER CALL END request_id=%s model=%s attempt=%s status=%s duration_ms=%.1f",
+                request_id,
+                model_name,
+                attempt,
+                response.status_code,
+                duration_ms,
+            )
+            return response.text
+        except httpx.HTTPStatusError as exc:
+            duration_ms = (time.perf_counter() - started) * 1000
+            detail = exc.response.text
+            self._logger.warning(
+                "OPENROUTER CALL FAIL request_id=%s model=%s attempt=%s status=%s duration_ms=%.1f error=%s",
+                request_id,
+                model_name,
+                attempt,
+                exc.response.status_code,
+                duration_ms,
+                detail,
+            )
+            raise RuntimeError(f"OpenRouter HTTP error {exc.response.status_code}: {detail}") from exc
+        except httpx.TimeoutException as exc:
+            duration_ms = (time.perf_counter() - started) * 1000
+            self._logger.warning(
+                "OPENROUTER CALL FAIL request_id=%s model=%s attempt=%s duration_ms=%.1f error=%s",
+                request_id,
+                model_name,
+                attempt,
+                duration_ms,
+                exc,
+            )
+            raise RuntimeError("OpenRouter request timed out") from exc
+        except httpx.NetworkError as exc:
+            duration_ms = (time.perf_counter() - started) * 1000
+            self._logger.warning(
+                "OPENROUTER CALL FAIL request_id=%s model=%s attempt=%s duration_ms=%.1f error=%s",
+                request_id,
+                model_name,
+                attempt,
+                duration_ms,
+                exc,
+            )
+            raise RuntimeError(f"OpenRouter connection failed: {exc}") from exc
+        except OSError as exc:
+            duration_ms = (time.perf_counter() - started) * 1000
+            self._logger.warning(
+                "OPENROUTER CALL FAIL request_id=%s model=%s attempt=%s duration_ms=%.1f error=%s",
+                request_id,
+                model_name,
+                attempt,
+                duration_ms,
+                exc,
+            )
+            raise RuntimeError(f"OpenRouter socket error: {exc.strerror or exc}") from exc
 
-        payload = json.loads(body)
+    def _extract_text_from_payload(self, payload: dict[str, Any]) -> str:
+        """Normalize the response payload into a plain string."""
         choices = payload.get("choices") or []
         if not choices:
             raise RuntimeError("OpenRouter returned no choices")
@@ -103,6 +251,83 @@ class OpenRouterClient:
         self._logger.warning("OpenRouter returned an unsupported content payload: %s", json.dumps(payload, ensure_ascii=True))
         raise RuntimeError("OpenRouter returned an unsupported content payload")
 
+    def _should_retry(self, error: RuntimeError, attempt: int) -> bool:
+        """Return whether a request error is worth retrying."""
+        if attempt >= max(settings.max_retries, 1):
+            return False
+
+        message = str(error).lower()
+        retryable_markers = (
+            "timed out",
+            "timeout",
+            "connection reset",
+            "temporarily unavailable",
+            "bad gateway",
+            "gateway timeout",
+            "service unavailable",
+            "too many requests",
+            "http error 408",
+            "http error 409",
+            "http error 425",
+            "http error 429",
+            "http error 500",
+            "http error 502",
+            "http error 503",
+            "http error 504",
+        )
+        if any(marker in message for marker in retryable_markers):
+            return True
+
+        socket_markers = (
+            "connection failed",
+            "socket error",
+            "network error",
+            "connecterror",
+            "readerror",
+            "name or service not known",
+            "nodename nor servname provided",
+            "timed out",
+        )
+        if any(marker in message for marker in socket_markers):
+            return "forbidden by its access permissions" not in message
+
+        return False
+
+    def _retry_delay_seconds(self, attempt: int) -> float:
+        """Return a small bounded backoff delay."""
+        return min(0.5 * (2 ** (attempt - 1)), 2.0)
+
+    @classmethod
+    def _get_shared_client(cls) -> httpx.Client:
+        """Return a process-wide pooled HTTP client for OpenRouter."""
+        with cls._client_lock:
+            if cls._shared_client is None or cls._shared_client.is_closed:
+                timeout = httpx.Timeout(
+                    connect=min(float(settings.request_timeout), 10.0),
+                    read=float(settings.request_timeout),
+                    write=float(settings.request_timeout),
+                    pool=5.0,
+                )
+                limits = httpx.Limits(
+                    max_connections=20,
+                    max_keepalive_connections=10,
+                    keepalive_expiry=30.0,
+                )
+                cls._shared_client = httpx.Client(
+                    timeout=timeout,
+                    limits=limits,
+                    http2=False,
+                )
+            return cls._shared_client
+
+    @classmethod
+    def close_shared_client(cls) -> None:
+        """Close the shared pooled HTTP client."""
+        with cls._client_lock:
+            if cls._shared_client is not None and not cls._shared_client.is_closed:
+                cls._shared_client.close()
+            cls._shared_client = None
+
     def generate_json(
         self,
         system_prompt: str,
@@ -110,6 +335,7 @@ class OpenRouterClient:
         *,
         temperature: float = 0.1,
         max_tokens: Optional[int] = None,
+        request_id: Optional[str] = None,
     ) -> dict[str, Any]:
         """Generate a JSON object from OpenRouter."""
         response_text = self.generate_text(
@@ -117,6 +343,7 @@ class OpenRouterClient:
             user_prompt,
             temperature=temperature,
             max_tokens=max_tokens,
+            request_id=request_id,
         )
         try:
             return self._extract_json_object(response_text)

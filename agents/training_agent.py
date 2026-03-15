@@ -72,6 +72,7 @@ class TrainingAgent(BaseAgent):
             test_size = pipeline_config.get("test_size", 0.2)
             random_state = pipeline_config.get("random_state", 42)
             preprocessing_result = pipeline_config.get("preprocessing_result", {})
+            training_overrides = pipeline_config.get("training_overrides", {})
 
             # Get target column from model selection
             target_column = model_selection.get("target_column", df.columns[-1])
@@ -137,6 +138,12 @@ class TrainingAgent(BaseAgent):
             # Determine if we should do multi-model comparison
             enable_multi_model = pipeline_config.get("enable_multi_model", False)
             top_candidates = self._extract_top_candidates(model_selection)
+            top_candidates = self._apply_training_overrides(
+                top_candidates=top_candidates,
+                task_type=task_type,
+                n_samples=len(df),
+                training_overrides=training_overrides if isinstance(training_overrides, dict) else {},
+            )
             candidate_models = [candidate["model_name"] for candidate in top_candidates]
 
             if enable_multi_model and candidate_models and len(candidate_models) > 1:
@@ -210,6 +217,7 @@ class TrainingAgent(BaseAgent):
 
         candidate_models = [candidate["model_name"] for candidate in top_candidates]
         optimize_hpo = pipeline_config.get("optimize_hyperparameters", True)
+        scoring = self._resolve_scoring_metric(task_type, pipeline_config)
         try:
             from utils.lightgbm_logger import install_lightgbm_warning_counter, reset_lightgbm_warning_counter
 
@@ -231,6 +239,7 @@ class TrainingAgent(BaseAgent):
             candidate_specs=top_candidates,
             task_type=task_type,
             optimize_hyperparameters=optimize_hpo,
+            scoring=scoring,
         )
 
         # Get best model and train final model
@@ -359,6 +368,7 @@ class TrainingAgent(BaseAgent):
 
         # Optionally run HPO
         optimize_hpo = pipeline_config.get("optimize_hyperparameters", False)
+        scoring = self._resolve_scoring_metric(task_type, pipeline_config)
         if optimize_hpo and pipeline_config.get("n_trials_hpo", 0) > 0:
             try:
                 from core.hyperparameter_optimizer import HyperparameterOptimizer
@@ -366,7 +376,7 @@ class TrainingAgent(BaseAgent):
                 optimizer = HyperparameterOptimizer(
                     n_trials=pipeline_config.get("n_trials_hpo", 10),
                     cv=pipeline_config.get("cv_folds", 5),
-                    scoring="accuracy" if task_type == "classification" else "r2",
+                    scoring=scoring,
                     random_state=random_state,
                 )
                 opt_result = optimizer.optimize(
@@ -397,7 +407,7 @@ class TrainingAgent(BaseAgent):
             X_train,
             y_train,
             cv=min(cv_folds, len(X_train) // 10),
-            scoring="accuracy" if task_type == "classification" else "r2",
+            scoring=scoring,
         )
 
         # Train on full training set and time it
@@ -489,6 +499,164 @@ class TrainingAgent(BaseAgent):
                 "search_space": {},
             }
         ]
+
+    def _apply_training_overrides(
+        self,
+        *,
+        top_candidates: list[dict[str, Any]],
+        task_type: str,
+        n_samples: int,
+        training_overrides: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        """Adjust candidate order and params using validated training overrides."""
+        candidates = [dict(candidate) for candidate in top_candidates]
+        if not candidates:
+            return candidates
+
+        force_model_name = str(training_overrides.get("force_model_name") or "").strip()
+        preferred_family = str(training_overrides.get("preferred_model_family") or "").strip()
+
+        if force_model_name:
+            matching = [
+                candidate for candidate in candidates
+                if self._normalize_model_name(candidate.get("model_name", "")) == self._normalize_model_name(force_model_name)
+            ]
+            if matching:
+                forced = matching[0]
+                candidates = [forced] + [candidate for candidate in candidates if candidate is not forced]
+            else:
+                candidates.insert(
+                    0,
+                    {
+                        "priority": 1,
+                        "model_name": force_model_name,
+                        "model_family": self._infer_model_family(force_model_name),
+                        "reasoning": "Forced by revision agent.",
+                        "fixed_params": self._get_default_hyperparameters(force_model_name, n_samples, task_type),
+                        "search_space": {},
+                    },
+                )
+        elif preferred_family:
+            ranked = [
+                candidate for candidate in candidates
+                if str(candidate.get("model_family") or "") == preferred_family
+            ]
+            remaining = [
+                candidate for candidate in candidates
+                if str(candidate.get("model_family") or "") != preferred_family
+            ]
+            if ranked:
+                candidates = ranked + remaining
+            else:
+                fallback_name = self._default_model_for_family(preferred_family, task_type)
+                candidates.insert(
+                    0,
+                    {
+                        "priority": 1,
+                        "model_name": fallback_name,
+                        "model_family": preferred_family,
+                        "reasoning": "Added by revision agent to satisfy the requested model family.",
+                        "fixed_params": self._get_default_hyperparameters(fallback_name, n_samples, task_type),
+                        "search_space": {},
+                    },
+                )
+
+        for candidate in candidates:
+            fixed_params = dict(candidate.get("fixed_params") or {})
+            model_name = str(candidate.get("model_name") or "")
+            fixed_params = self._apply_parameter_overrides(
+                model_name=model_name,
+                fixed_params=fixed_params,
+                training_overrides=training_overrides,
+                task_type=task_type,
+            )
+            candidate["fixed_params"] = fixed_params
+            candidate["model_family"] = str(candidate.get("model_family") or self._infer_model_family(model_name))
+
+        for index, candidate in enumerate(candidates[:3], start=1):
+            candidate["priority"] = index
+        return candidates[:3]
+
+    def _apply_parameter_overrides(
+        self,
+        *,
+        model_name: str,
+        fixed_params: dict[str, Any],
+        training_overrides: dict[str, Any],
+        task_type: str,
+    ) -> dict[str, Any]:
+        """Apply safe deterministic parameter changes for revisions."""
+        params = dict(fixed_params)
+        normalized = self._normalize_model_name(model_name)
+        if task_type == "classification" and training_overrides.get("enable_class_weights"):
+            if "logistic" in normalized or "randomforest" in normalized or normalized in {"svm", "svc"}:
+                params["class_weight"] = "balanced"
+
+        regularization = str(training_overrides.get("regularization_strength") or "normal")
+        reduce_complexity = bool(training_overrides.get("reduce_complexity", False))
+
+        if "randomforest" in normalized:
+            if reduce_complexity:
+                params["max_depth"] = min(int(params.get("max_depth", 10)), 6)
+                params["min_samples_split"] = max(int(params.get("min_samples_split", 2)), 8)
+                params["n_estimators"] = min(int(params.get("n_estimators", 100)), 80)
+        if "gradientboosting" in normalized:
+            if reduce_complexity:
+                params["max_depth"] = min(int(params.get("max_depth", 5)), 3)
+                params["n_estimators"] = min(int(params.get("n_estimators", 100)), 80)
+                params["learning_rate"] = min(float(params.get("learning_rate", 0.1)), 0.08)
+        if "logisticregression" in normalized:
+            if regularization in {"high", "very_high"}:
+                params["C"] = 0.5 if regularization == "high" else 0.25
+                params.setdefault("solver", "lbfgs")
+                params.setdefault("max_iter", 1000)
+        if normalized in {"svm", "svc", "svr"} and regularization in {"high", "very_high"}:
+            params["C"] = 0.7 if regularization == "high" else 0.4
+        if "ridge" in normalized and regularization in {"high", "very_high"}:
+            params["alpha"] = 2.0 if regularization == "high" else 4.0
+
+        return params
+
+    def _resolve_scoring_metric(self, task_type: str, pipeline_config: dict[str, Any]) -> str:
+        """Map metric priority into a scoring string when possible."""
+        if task_type != "classification":
+            return "r2"
+        metric = str((pipeline_config.get("training_overrides", {}) or {}).get("metric_priority") or "").strip().lower()
+        return {
+            "recall": "recall_weighted",
+            "precision": "precision_weighted",
+            "f1": "f1_weighted",
+            "accuracy": "accuracy",
+        }.get(metric, "accuracy")
+
+    def _normalize_model_name(self, model_name: str) -> str:
+        """Normalize model names for deterministic matching."""
+        return str(model_name).lower().replace("-", "").replace("_", "")
+
+    def _infer_model_family(self, model_name: str) -> str:
+        """Infer a broad model family from the model name."""
+        normalized = self._normalize_model_name(model_name)
+        if "randomforest" in normalized:
+            return "tree_ensemble"
+        if "gradientboosting" in normalized or "xgboost" in normalized or "lightgbm" in normalized:
+            return "boosted_trees"
+        if "logistic" in normalized or "ridge" in normalized:
+            return "linear"
+        if "svm" in normalized or "svr" in normalized or "svc" in normalized:
+            return "kernel"
+        return "other"
+
+    def _default_model_for_family(self, family: str, task_type: str) -> str:
+        """Return a safe default model for a requested family."""
+        if family == "linear":
+            return "LogisticRegression" if task_type == "classification" else "Ridge"
+        if family == "tree_ensemble":
+            return "RandomForest"
+        if family == "boosted_trees":
+            return "GradientBoosting"
+        if family == "kernel":
+            return "SVM" if task_type == "classification" else "SVR"
+        return "RandomForest"
 
     def _find_candidate(
         self,

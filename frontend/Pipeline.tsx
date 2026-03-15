@@ -39,6 +39,14 @@ const DEFAULT_CONFIG = {
   test_size: 0.2,
   random_state: 42,
 } satisfies Omit<PipelineConfig, "task_type">;
+const CANONICAL_TO_EXECUTION_STAGE: Record<string, string> = {
+  analysis: "analysis",
+  preprocessing: "preprocessing",
+  feature_engineering: "features",
+  training: "training",
+  evaluation: "evaluation",
+  explainability: "results",
+};
 
 const createInitialStatuses = (): Record<string, StageStatus> =>
   Object.fromEntries(EXECUTION_STAGE_ORDER.map((stageId) => [stageId, "waiting"])) as Record<string, StageStatus>;
@@ -146,6 +154,60 @@ const Pipeline = () => {
       setExplanation(null);
     }
   }, [refreshLogs, syncStageResults]);
+
+  const getRerunStages = useCallback((rerunFromStage: string) => {
+    const concreteStage = CANONICAL_TO_EXECUTION_STAGE[rerunFromStage] || rerunFromStage;
+    const startIndex = EXECUTION_STAGE_ORDER.indexOf(concreteStage);
+    if (startIndex < 0) return [];
+    return EXECUTION_STAGE_ORDER.slice(startIndex);
+  }, []);
+
+  const handleRevisionRerunStart = useCallback((rerunFromStage: string) => {
+    const rerunStages = getRerunStages(rerunFromStage);
+    if (rerunStages.length === 0) return;
+
+    const [firstStage, ...downstreamStages] = rerunStages;
+    const rerunStageSet = new Set(rerunStages);
+
+    setIsRunningPipeline(true);
+    setError(null);
+    setPipelineStatus((current) => {
+      const next = { ...current };
+      next[firstStage] = "running";
+      for (const stageId of downstreamStages) {
+        next[stageId] = "waiting";
+      }
+      return next;
+    });
+    setStageResults((current) => {
+      const next = { ...current };
+      for (const stageId of rerunStages) {
+        delete next[stageId];
+      }
+      return next;
+    });
+    setStageLogs((current) => {
+      const next = { ...current };
+      for (const stageId of rerunStages) {
+        next[stageId] = [];
+      }
+      return next;
+    });
+
+    if (rerunStageSet.has("training") || rerunStageSet.has("evaluation") || rerunStageSet.has("results")) {
+      setMetrics(null);
+    }
+    if (rerunStageSet.has("results")) {
+      setExplanation(null);
+    }
+  }, [getRerunStages]);
+
+  const handleRevisionRerunComplete = useCallback(async () => {
+    await refreshPipelineData().catch(() => {
+      // If the post-rerun refresh fails, keep the last optimistic state.
+    });
+    setIsRunningPipeline(false);
+  }, [refreshPipelineData]);
 
   useEffect(() => {
     void refreshPipelineData().catch((err) => {
@@ -441,6 +503,9 @@ const Pipeline = () => {
           activeStageId={activeStageId}
           stageLogs={stageLogs}
           metrics={metrics}
+          onRevisionRerunStart={handleRevisionRerunStart}
+          onRevisionRerunComplete={handleRevisionRerunComplete}
+          onPipelineRefresh={refreshPipelineData}
         />
       </div>
     </>

@@ -45,6 +45,22 @@ export interface ChatSelectionContext {
 export interface ChatResponse {
   answer: string;
   llm_used: boolean;
+  response_mode?: "llm" | "unavailable" | "structured" | null;
+  revision?: Record<string, unknown> | null;
+}
+
+export interface RevisionStateResponse {
+  run_id: string | null;
+  parent_run_id: string | null;
+  dataset: Record<string, unknown>;
+  target_column: string | null;
+  task_type: TaskType;
+  stage_configs: Record<string, Record<string, unknown>>;
+  stage_outputs: Record<string, unknown>;
+  metrics: Record<string, unknown>;
+  revision_reason: string | null;
+  changed_stages: string[];
+  created_at: string | null;
 }
 
 export interface PipelineStatusResponse {
@@ -147,9 +163,49 @@ export interface EvaluationInsightsResponse {
 }
 
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL as string | undefined) || "http://127.0.0.1:8000";
+const CHAT_REQUEST_TIMEOUT_MS = 210000;
+const CHAT_APPLY_TIMEOUT_MS = 300000;
 
-async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${path}`, init);
+class ApiTimeoutError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ApiTimeoutError";
+  }
+}
+
+async function apiRequest<T>(
+  path: string,
+  init?: RequestInit,
+  options?: {
+    timeoutMs?: number;
+  },
+): Promise<T> {
+  const controller = new AbortController();
+  const timeoutMs = options?.timeoutMs;
+  const timeoutId =
+    typeof timeoutMs === "number" && timeoutMs > 0
+      ? window.setTimeout(() => controller.abort(), timeoutMs)
+      : null;
+
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, {
+      ...init,
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (timeoutId !== null) {
+      window.clearTimeout(timeoutId);
+    }
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw new ApiTimeoutError("The chat request took too long and timed out.");
+    }
+    throw error;
+  }
+
+  if (timeoutId !== null) {
+    window.clearTimeout(timeoutId);
+  }
 
   if (!response.ok) {
     let detail = `Request failed with status ${response.status}`;
@@ -235,6 +291,7 @@ export function queryChat(
   question: string,
   history: ChatMessagePayload[],
   selectionContext?: ChatSelectionContext | null,
+  mode: "suggest" | "apply" = "suggest",
 ): Promise<ChatResponse> {
   return apiRequest<ChatResponse>("/api/chat/query", {
     method: "POST",
@@ -245,8 +302,15 @@ export function queryChat(
       question,
       history,
       selection_context: selectionContext ?? null,
+      mode,
     }),
+  }, {
+    timeoutMs: mode === "apply" ? CHAT_APPLY_TIMEOUT_MS : CHAT_REQUEST_TIMEOUT_MS,
   });
+}
+
+export function getCurrentRevisionState(): Promise<RevisionStateResponse> {
+  return apiRequest<RevisionStateResponse>("/api/revisions/current");
 }
 
 export function getDownloadUrl(kind: "model" | "logs"): string {

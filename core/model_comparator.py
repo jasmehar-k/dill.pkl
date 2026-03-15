@@ -55,6 +55,7 @@ class ModelComparator:
         candidate_specs: Optional[list[dict[str, Any]]] = None,
         task_type: str = "classification",
         optimize_hyperparameters: bool = True,
+        scoring: Optional[str] = None,
     ) -> dict[str, Any]:
         """Compare multiple candidate models using cross-validation.
 
@@ -76,7 +77,7 @@ class ModelComparator:
         """
         start_time = time.perf_counter()
 
-        scoring = "accuracy" if task_type == "classification" else "r2"
+        scoring = scoring or ("accuracy" if task_type == "classification" else "r2")
         cv = min(self.cv_folds, max(3, len(X_train) // 20))
 
         missing_models = [

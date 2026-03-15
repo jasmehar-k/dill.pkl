@@ -214,6 +214,8 @@ def choose_missing_value_strategy(
     large_dataset = row_count >= int(config["small_dataset_row_threshold"])
     safe_row_drop = 0.0 < rows_with_missing_fraction <= float(config["drop_rows_max_fraction"])
     drop_rows = large_dataset and safe_row_drop
+    forced_strategy = str(config.get("missing_value_strategy") or "auto")
+    protect_rows = bool(config.get("protect_rows_from_drop", False))
 
     if drop_columns and drop_rows:
         strategy_used = "mixed"
@@ -245,6 +247,27 @@ def choose_missing_value_strategy(
             "Missing values were imputed to preserve rows because the dataset is relatively small or "
             "dropping rows would discard too much information."
         )
+
+    if protect_rows:
+        drop_rows = False
+        strategy_used = "impute"
+        strategy_reason = "Row dropping was disabled by the revision agent, so remaining missing values were imputed."
+    elif forced_strategy != "auto":
+        if forced_strategy == "impute":
+            drop_rows = False
+            strategy_used = "impute"
+            strategy_reason = "The revision agent forced an imputation-first missing-value strategy."
+        elif forced_strategy == "drop_rows":
+            drop_rows = analysis["rows_with_missing"] > 0
+            strategy_used = "drop_rows"
+            strategy_reason = "The revision agent requested row dropping for missing values."
+        elif forced_strategy == "drop_columns":
+            drop_rows = False
+            strategy_used = "drop_columns"
+            strategy_reason = "The revision agent requested column dropping for sparse columns only."
+        elif forced_strategy == "mixed":
+            strategy_used = "mixed"
+            strategy_reason = "The revision agent requested the mixed missing-value handling policy."
 
     return {
         "strategy_used": strategy_used,
@@ -417,7 +440,10 @@ def choose_encoding_strategy(
         if column not in train_df.columns:
             continue
         cardinality = int(train_df[column].nunique(dropna=True))
-        if cardinality <= int(config["onehot_max_categories"]):
+        override = str(config.get("encoding_strategy_overrides", {}).get(column, "")).strip()
+        if override in {"onehot", "frequency"}:
+            strategies[column] = override
+        elif cardinality <= int(config["onehot_max_categories"]):
             strategies[column] = "onehot"
         else:
             strategies[column] = "frequency"
@@ -482,6 +508,14 @@ def choose_scaler(
     config: dict[str, Any],
 ) -> dict[str, Any]:
     """Choose between standard and robust scaling for numeric columns."""
+    scaler_override = str(config.get("scaler") or "auto")
+    if scaler_override in {"StandardScaler", "RobustScaler", "None"}:
+        return {
+            "scaler": scaler_override,
+            "reason": f"Used {scaler_override} because the revision agent overrode scaler selection." if scaler_override != "None" else "Skipped scaling because the revision agent disabled it.",
+            "outlier_heavy_columns": [],
+        }
+
     outlier_heavy_columns: list[str] = []
     threshold = float(config["outlier_fraction_threshold"])
 

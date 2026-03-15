@@ -35,6 +35,7 @@ class EvaluationAgent(BaseAgent):
         self,
         training_result: dict[str, Any],
         task_type: str = "classification",
+        evaluation_config: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Evaluate the trained model.
 
@@ -65,10 +66,18 @@ class EvaluationAgent(BaseAgent):
             y_pred = model.predict(X_test)
             y_true = y_test.to_numpy() if hasattr(y_test, "to_numpy") else np.asarray(y_test)
 
+            evaluation_config = evaluation_config or {}
+
             if task_type == "classification":
                 result = self._evaluate_classification(model, y_true, y_pred, X_test)
             else:
                 result = self._evaluate_regression(y_true, y_pred)
+
+            result["primary_metric"] = (
+                str(evaluation_config.get("primary_metric") or "").strip()
+                or ("accuracy" if task_type == "classification" else "r2")
+            )
+            result["deployment_threshold"] = evaluation_config.get("deployment_threshold")
 
             deployment_decision = self._make_deployment_decision(result, training_result)
             result["deployment_decision"] = deployment_decision
@@ -238,9 +247,24 @@ class EvaluationAgent(BaseAgent):
         if task_type == "classification":
             accuracy = evaluation_result.get("accuracy", 0)
             f1 = evaluation_result.get("f1", 0)
+            recall = evaluation_result.get("recall", 0)
             train_score = training_result.get("train_score", 0)
             test_score = training_result.get("test_score", 0)
             overfitting_gap = train_score - test_score
+            primary_metric = str(evaluation_result.get("primary_metric") or "accuracy")
+            threshold = evaluation_result.get("deployment_threshold")
+
+            if threshold is not None:
+                metric_value = {
+                    "accuracy": accuracy,
+                    "f1": f1,
+                    "recall": recall,
+                }.get(primary_metric, accuracy)
+                if metric_value >= float(threshold):
+                    return "deploy"
+                if metric_value >= float(threshold) * 0.8:
+                    return "iterate"
+                return "reject"
 
             if accuracy >= 0.9 and f1 >= 0.9 and overfitting_gap < 0.1:
                 return "deploy"
@@ -266,8 +290,12 @@ class EvaluationAgent(BaseAgent):
         if task_type == "classification":
             accuracy = evaluation_result.get("accuracy", 0)
             f1 = evaluation_result.get("f1", 0)
+            primary_metric = evaluation_result.get("primary_metric", "accuracy")
             decision = evaluation_result.get("deployment_decision", "unknown")
-            return f"Model achieved {accuracy:.1%} accuracy and {f1:.1%} F1 score. Deployment decision: {decision}."
+            return (
+                f"Model achieved {accuracy:.1%} accuracy and {f1:.1%} F1 score. "
+                f"Primary metric: {primary_metric}. Deployment decision: {decision}."
+            )
 
         r2 = evaluation_result.get("r2", 0)
         rmse = evaluation_result.get("rmse", 0)

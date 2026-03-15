@@ -11,7 +11,7 @@ import {
 interface Message {
   role: "user" | "assistant";
   content: string;
-  source?: "llm" | "fallback";
+  source?: "llm" | "unavailable" | "structured";
 }
 
 interface ChatBotProps {
@@ -21,6 +21,9 @@ interface ChatBotProps {
   activeStageId: string | null;
   stageLogs: Record<string, string[]>;
   metrics: MetricsResponse | null;
+  onRevisionRerunStart?: (rerunFromStage: string) => void;
+  onRevisionRerunComplete?: () => void | Promise<void>;
+  onPipelineRefresh?: () => void | Promise<void>;
 }
 
 interface FloatingSelection extends ChatSelectionContext {
@@ -35,6 +38,9 @@ const ChatBot = ({
   activeStageId,
   stageLogs,
   metrics,
+  onRevisionRerunStart,
+  onRevisionRerunComplete,
+  onPipelineRefresh,
 }: ChatBotProps) => {
   const [isOpen, setIsOpen] = useState(false);
   const [messages, setMessages] = useState<Message[]>([
@@ -47,6 +53,7 @@ const ChatBot = ({
   const [isThinking, setIsThinking] = useState(false);
   const [pinnedContext, setPinnedContext] = useState<ChatSelectionContext | null>(null);
   const [floatingSelection, setFloatingSelection] = useState<FloatingSelection | null>(null);
+  const [pendingRevisionPlan, setPendingRevisionPlan] = useState<Record<string, unknown> | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -126,57 +133,179 @@ const ChatBot = ({
       surrounding_text: floatingSelection.surrounding_text,
     };
     setPinnedContext(nextContext);
-    setMessages((prev) => [
-      ...prev,
-      {
-        role: "user",
-        content: buildSelectionHistoryMessage(nextContext),
-      },
-    ]);
     setFloatingSelection(null);
     setIsOpen(true);
-    setInput((current) => current || "Can you explain this?");
     window.getSelection()?.removeAllRanges();
     window.setTimeout(() => inputRef.current?.focus(), 80);
   };
 
-  const handleSend = async () => {
-    if (!input.trim()) return;
+  const isApplyConfirmation = (value: string) => {
+    const normalized = value.trim().toLowerCase();
+    return [
+      "apply",
+      "apply it",
+      "proceed",
+      "continue",
+      "go ahead",
+      "do it",
+      "do that",
+      "yes",
+      "yes please",
+      "sure",
+      "yes, apply it",
+    ].includes(normalized);
+  };
 
-    const trimmed = input.trim();
-    const userMsg: Message = { role: "user", content: trimmed };
+  const isDirectRevisionCommand = (value: string) => {
+    const normalized = value.trim().toLowerCase();
+    if (!normalized) return false;
+    if (isApplyConfirmation(normalized)) return true;
+
+    const explanatoryPrefixes = [
+      "why ",
+      "how ",
+      "what ",
+      "which ",
+      "can you explain",
+      "could you explain",
+      "explain why",
+      "tell me why",
+    ];
+    if (explanatoryPrefixes.some((prefix) => normalized.startsWith(prefix))) {
+      return false;
+    }
+
+    const directChangeMarkers = [
+      "run without",
+      "train without",
+      "retrain without",
+      "remove ",
+      "drop ",
+      "exclude ",
+      "add ",
+      "include ",
+      "switch to",
+      "use ",
+      "undo ",
+      "revert ",
+      "go back",
+      "make the model",
+      "change the",
+    ];
+    const preferenceMarkers = ["i want to", "i would like to", "please", "let's", "lets"];
+
+    if (directChangeMarkers.some((marker) => normalized.includes(marker))) {
+      return true;
+    }
+
+    return (
+      preferenceMarkers.some((marker) => normalized.includes(marker)) &&
+      ["without ", "remove ", "drop ", "exclude ", "add ", "include ", "switch "].some((marker) =>
+        normalized.includes(marker),
+      )
+    );
+  };
+
+  const runChatRequest = async ({
+    prompt,
+    mode,
+    userMessage = prompt,
+  }: {
+    prompt: string;
+    mode: "suggest" | "apply";
+    userMessage?: string;
+  }) => {
+    const trimmed = prompt.trim();
+    if (!trimmed) return;
+
+    const userMsg: Message = { role: "user", content: userMessage.trim() };
     setMessages((prev) => [...prev, userMsg]);
     setInput("");
     setIsThinking(true);
+
+    const rerunFromStage =
+      mode === "apply" && pendingRevisionPlan
+        ? String(pendingRevisionPlan.rerun_from_stage ?? "")
+        : "";
+    const shouldTrackRerun = mode === "apply" && Boolean(rerunFromStage);
+    let refreshInterval: number | null = null;
+    let didApplyRevision = false;
+
+    if (shouldTrackRerun) {
+      onRevisionRerunStart?.(rerunFromStage);
+      if (onPipelineRefresh) {
+        refreshInterval = window.setInterval(() => {
+          void onPipelineRefresh();
+        }, 900);
+      }
+    }
 
     try {
       const history = messages.slice(-8).map((message) => ({
         role: message.role,
         content: message.content,
       }));
-      const response = await queryChat(trimmed, history, pinnedContext);
+      const response = await queryChat(trimmed, history, pinnedContext, mode);
+      const revision = response.revision as Record<string, unknown> | null | undefined;
+      didApplyRevision = revision?.applied === true;
+
+      if (revision?.mode === "suggest" && revision?.applied === false) {
+        const plan = revision.plan as Record<string, unknown> | undefined;
+        setPendingRevisionPlan(plan ?? null);
+      } else if (revision?.applied === true) {
+        setPendingRevisionPlan(null);
+      }
+
       setMessages((prev) => [
         ...prev,
         {
           role: "assistant",
           content: response.answer,
-          source: response.llm_used ? "llm" : "fallback",
+          source: response.response_mode ?? (response.llm_used ? "llm" : "unavailable"),
         },
       ]);
-    } catch {
-      const fallback = buildEmergencyFallback({
-        datasetName,
-        targetColumn,
-        taskType,
-        activeStageId,
-        stageLogs,
-        metrics,
-        pinnedContext,
-      });
-      setMessages((prev) => [...prev, { role: "assistant", content: fallback, source: "fallback" }]);
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? buildChatErrorMessage(error.message)
+          : buildEmergencyFallback({
+              datasetName,
+              targetColumn,
+              taskType,
+              activeStageId,
+              stageLogs,
+              metrics,
+              pinnedContext,
+            });
+      setMessages((prev) => [...prev, { role: "assistant", content: message, source: "unavailable" }]);
     } finally {
+      if (refreshInterval !== null) {
+        window.clearInterval(refreshInterval);
+      }
+      if (shouldTrackRerun || didApplyRevision) {
+        await onPipelineRefresh?.();
+        await onRevisionRerunComplete?.();
+      }
       setIsThinking(false);
     }
+  };
+
+  const handleSend = async () => {
+    if (!input.trim()) return;
+    const nextMode =
+      (pendingRevisionPlan && isApplyConfirmation(input)) || isDirectRevisionCommand(input)
+        ? "apply"
+        : "suggest";
+    await runChatRequest({ prompt: input, mode: nextMode });
+  };
+
+  const handleApplyPendingRevision = async () => {
+    if (!pendingRevisionPlan || isThinking) return;
+    await runChatRequest({
+      prompt: "apply it",
+      mode: "apply",
+      userMessage: "Apply the suggested pipeline revision.",
+    });
   };
 
   return (
@@ -270,7 +399,11 @@ const ChatBot = ({
                     {renderChatContent(message.content)}
                     {message.role === "assistant" && message.source && (
                       <div className="mt-2 text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
-                        {message.source === "llm" ? "LLM response" : "Grounded fallback"}
+                        {message.source === "llm"
+                          ? "LLM response"
+                          : message.source === "unavailable"
+                            ? "LLM unavailable"
+                            : "Structured response"}
                       </div>
                     )}
                   </div>
@@ -298,6 +431,38 @@ const ChatBot = ({
             </div>
 
             <div className="border-t border-border/30 p-3">
+              {pendingRevisionPlan && (
+                <div className="mb-3 rounded-xl border border-primary/20 bg-primary/8 p-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="text-[11px] font-medium uppercase tracking-[0.18em] text-primary">
+                        Suggested Revision
+                      </div>
+                      <p className="mt-1 text-xs leading-5 text-foreground">
+                        {String(pendingRevisionPlan.reason ?? "A pipeline revision is ready to apply.")}
+                      </p>
+                      {pendingRevisionPlan.rerun_from_stage && (
+                        <p className="mt-1 text-[11px] text-muted-foreground">
+                          Reruns from: {String(pendingRevisionPlan.rerun_from_stage)}
+                        </p>
+                      )}
+                    </div>
+                    <button
+                      onClick={() => setPendingRevisionPlan(null)}
+                      className="rounded-md p-1 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                  <button
+                    onClick={() => void handleApplyPendingRevision()}
+                    disabled={isThinking}
+                    className="mt-3 rounded-lg bg-primary px-3 py-2 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/85 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    Apply revision
+                  </button>
+                </div>
+              )}
               <div className="mb-2 text-[11px] text-muted-foreground">
                 {pinnedContext
                   ? "Your next question will include the highlighted snippet as extra context."
@@ -389,12 +554,6 @@ const extractSurroundingText = (element: Element, selectedText: string) => {
 };
 
 const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max);
-
-const buildSelectionHistoryMessage = (context: ChatSelectionContext) =>
-  [
-    context.source_label ? `Highlighted context from ${context.source_label}:` : "Highlighted context:",
-    `"${context.text}"`,
-  ].join("\n");
 
 const renderChatContent = (content: string) => {
   const blocks = content.split(/\n\s*\n/).map((block) => block.trim()).filter(Boolean);
@@ -510,6 +669,20 @@ const buildEmergencyFallback = (context: {
     );
   }
   return `${lines.join("\n")}\nThe full chat assistant is temporarily unavailable, but the pipeline context is still loaded.`;
+};
+
+const buildChatErrorMessage = (detail: string) => {
+  const normalized = detail.trim();
+
+  if (!normalized) {
+    return "The chat request failed before the assistant could answer. Please try again.";
+  }
+
+  if (normalized.toLowerCase().includes("timed out")) {
+    return "That took too long, so I stopped waiting for the chat model. Please try again.";
+  }
+
+  return normalized;
 };
 
 export default ChatBot;

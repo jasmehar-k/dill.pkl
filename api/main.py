@@ -17,7 +17,10 @@ from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
+from agents.chatbot_orchestrator import ChatbotOrchestrator
 from config import settings
+from core.pipeline_state import PipelineState
+from core.revision_history import RevisionHistoryManager
 from utils.logger import get_logger
 from utils.openrouter_client import OpenRouterClient
 from utils.evaluation_insights import generate_evaluation_insights
@@ -42,33 +45,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
-# Pipeline state management
-class PipelineState:
-    """Manages the state of the AutoML pipeline."""
-
-    def __init__(self):
-        self.dataset: Optional[pd.DataFrame] = None
-        self.dataset_path: Optional[str] = None
-        self.dataset_filename: Optional[str] = None
-        self.target_column: Optional[str] = None
-        self.stage_results: dict[str, Any] = {}
-        self.stage_statuses: dict[str, str] = {
-            "analysis": "waiting",
-            "preprocessing": "waiting",
-            "features": "waiting",
-            "model_selection": "waiting",
-            "training": "waiting",
-            "loss": "waiting",
-            "evaluation": "waiting",
-            "results": "waiting",
-        }
-        self.stage_logs: dict[str, list[str]] = {stage: [] for stage in self.stage_statuses}
-        self.pipeline_id: Optional[str] = None
-
-
 pipeline_state = PipelineState()
-chat_client = OpenRouterClient("ChatAssistant")
+chat_client = OpenRouterClient("ChatAssistant", model_name=settings.chat_model_name)
+revision_history = RevisionHistoryManager()
+chatbot_orchestrator = ChatbotOrchestrator()
+
+
+@app.on_event("shutdown")
+async def shutdown_openrouter_client() -> None:
+    """Close the shared OpenRouter HTTP client on app shutdown."""
+    OpenRouterClient.close_shared_client()
 
 
 # Request/Response models
@@ -118,11 +104,14 @@ class ChatRequest(BaseModel):
     question: str
     history: list[ChatMessage] = []
     selection_context: Optional[ChatSelectionContext] = None
+    mode: str = "suggest"
 
 
 class ChatResponse(BaseModel):
     answer: str
     llm_used: bool = False
+    response_mode: str = "llm"
+    revision: Optional[dict[str, Any]] = None
 class DeploymentReasoningResponse(BaseModel):
     recommendation: str
     confidence: str
@@ -153,9 +142,8 @@ class EvaluationInsightsResponse(BaseModel):
 # Helper functions
 def add_log(stage: str, message: str):
     """Add a log message to a stage."""
-    # if stage in pipeline_state.stage_logs:
-    #     pipeline_state.stage_logs[stage].append(message)
-    pass
+    if stage in pipeline_state.stage_logs:
+        pipeline_state.stage_logs[stage].append(message)
 
 
 def add_agent_summary_logs(stage: str, result: Optional[dict[str, Any]]):
@@ -288,6 +276,7 @@ def build_chat_context() -> dict[str, Any]:
         "filename": pipeline_state.dataset_filename,
         "rows": int(len(df)) if df is not None else None,
         "columns": int(len(df.columns)) if df is not None else None,
+        "column_names": [str(column) for column in df.columns] if df is not None else [],
         "target_column": pipeline_state.target_column,
         "preview_rows": [],
         "columns_info": [],
@@ -324,14 +313,33 @@ def build_chat_context() -> dict[str, Any]:
         for stage, logs in pipeline_state.stage_logs.items()
         if logs
     }
+    completed_stages = [
+        stage for stage, status in pipeline_state.stage_statuses.items()
+        if status == "completed"
+    ]
+    revision_history_summary = [
+        {
+            "run_id": record.run_id,
+            "parent_run_id": record.parent_run_id,
+            "revision_reason": record.revision_reason,
+            "changed_stages": record.changed_stages,
+            "metrics": record.metrics,
+            "created_at": record.created_at,
+        }
+        for record in pipeline_state.revision_history[-3:]
+    ]
     evaluation = pipeline_state.stage_results.get("evaluation", {}) or {}
     training = pipeline_state.stage_results.get("training", {}) or {}
 
     return {
         "dataset": dataset_summary,
-        "stage_statuses": pipeline_state.stage_statuses,
+        "stage_statuses": dict(pipeline_state.stage_statuses),
+        "completed_stages": completed_stages,
         "stage_results": stage_results,
         "recent_logs": recent_logs,
+        "current_run": make_json_safe(pipeline_state.current_structured_state()),
+        "pending_revision_plan": make_json_safe(pipeline_state.pending_revision_plan),
+        "recent_revisions": make_json_safe(revision_history_summary),
         "metrics": {
             "task_type": evaluation.get("task_type"),
             "accuracy": evaluation.get("accuracy"),
@@ -351,151 +359,15 @@ def build_chat_context() -> dict[str, Any]:
     }
 
 
-def build_chat_fallback_answer(
-    question: str,
-    context: dict[str, Any],
-    selection_context: Optional[dict[str, Any]] = None,
-) -> str:
-    """Generate a grounded fallback answer without an LLM."""
-    lower = question.lower().strip()
-    dataset = context.get("dataset", {})
-    stage_results = context.get("stage_results", {})
-    stage_statuses = context.get("stage_statuses", {})
-    metrics = context.get("metrics", {})
-    selected_text = str(selection_context.get("text") or "").strip() if selection_context else ""
-    source_label = str(selection_context.get("source_label") or "").strip() if selection_context else ""
-
-    dataset_name = dataset.get("filename") or "the current dataset"
-    target_column = dataset.get("target_column")
-    rows = dataset.get("rows")
-    columns = dataset.get("columns")
-    numeric_columns = dataset.get("numeric_columns", [])
-    categorical_columns = dataset.get("categorical_columns", [])
-
-    if not dataset.get("filename"):
-        return "No dataset is loaded yet. Upload a dataset first, then I can explain its columns, stages, model choice, and results."
-
-    if "dataset" in lower or "column" in lower or "what's in" in lower or "whats in" in lower:
-        parts = [f"{dataset_name} has {rows} rows and {columns} columns."]
-        if target_column:
-            parts.append(f"The target column is {target_column}.")
-        if numeric_columns:
-            parts.append(
-                f"Numeric columns include {', '.join(numeric_columns[:6])}{'...' if len(numeric_columns) > 6 else ''}."
-            )
-        if categorical_columns:
-            parts.append(
-                f"Categorical columns include {', '.join(categorical_columns[:6])}{'...' if len(categorical_columns) > 6 else ''}."
-            )
-        if selected_text:
-            parts.append(
-                f"You highlighted {selected_text!r}{f' from {source_label}' if source_label else ''}, so I can relate the dataset explanation back to that snippet."
-            )
-        return " ".join(parts)
-
-    if selected_text and ("this" in lower or "highlight" in lower or "selected" in lower or "explain" in lower):
-        return (
-            f"You highlighted {selected_text!r}{f' from {source_label}' if source_label else ''}. "
-            f"I can use that snippet as context while explaining the current run for {dataset_name}. "
-            f"Ask what it means, why it matters, or how it connects to preprocessing, features, model choice, or metrics."
-        )
-
-    if "preprocess" in lower:
-        preprocessing = stage_results.get("preprocessing", {}) or {}
-        if preprocessing:
-            train_size = preprocessing.get("train_size")
-            test_size = preprocessing.get("test_size")
-            explanation = str(preprocessing.get("explanation") or "").strip()
-            dropped = preprocessing.get("dropped_columns", []) or []
-            transformed = preprocessing.get("transformed_feature_count")
-            if explanation:
-                return explanation
-            return (
-                f"Preprocessing cleaned the data before modeling. It split the dataset into {train_size} training rows and {test_size} test rows, "
-                f"dropped {len(dropped)} weak column(s), and produced {transformed} transformed feature(s) for modeling."
-            )
-        return (
-            "Preprocessing is the stage where the dataset gets cleaned and prepared for modeling, "
-            "like handling missing values, encoding categories, scaling numbers, and splitting into train and test sets."
-        )
-
-    if "feature" in lower:
-        features = stage_results.get("features", {}) or {}
-        if features:
-            selected = features.get("selected_features", []) or []
-            generated = features.get("generated_features", []) or []
-            dropped = features.get("dropped_columns", []) or []
-            return (
-                f"Feature engineering kept {features.get('final_feature_count', len(selected))} final features for {dataset_name}. "
-                f"It generated features like {', '.join(generated[:4]) if generated else 'no new interactions'}, "
-                f"kept features such as {', '.join(selected[:6]) if selected else 'the strongest available features'}, "
-                f"and dropped {len(dropped)} weaker or redundant columns."
-            )
-        return "Feature engineering creates, filters, and scores input columns so the model learns from the most useful signals."
-
-    if "model" in lower or "select" in lower:
-        model_selection = stage_results.get("model_selection", {}) or {}
-        training = stage_results.get("training", {}) or {}
-        selected_model = model_selection.get("selected_model") or training.get("model_name")
-        if selected_model:
-            summary = str(model_selection.get("llm_summary") or "").strip()
-            if summary:
-                return f"The selected model is {selected_model}. {summary}"
-            return f"The selected model is {selected_model}. I can also explain its hyperparameters, candidate models, or why it was chosen."
-        return "Model selection compares candidate models and picks the one that best fits the dataset and task."
-
-    if "train" in lower:
-        training = stage_results.get("training", {}) or {}
-        if training:
-            model_name = training.get("model_name", "the selected model")
-            return (
-                f"Training fit {model_name} on the prepared dataset. It reached a best cross-validation score of "
-                f"{training.get('best_score', 'unknown')} and a test score of {training.get('test_score', 'unknown')}."
-            )
-        return "Training is the stage where the selected model learns from the training split and gets scored on validation data."
-
-    if "evaluation" in lower or "metric" in lower or "accuracy" in lower or "rmse" in lower or "r2" in lower:
-        task_type = metrics.get("task_type")
-        if task_type == "regression":
-            return (
-                f"This is a regression run on {dataset_name}. The model achieved R2 = {metrics.get('r2')} and RMSE = {metrics.get('rmse')}. "
-                f"Deployment decision: {metrics.get('deployment_decision') or 'not available'}."
-            )
-        if metrics.get("accuracy") is not None:
-            return (
-                f"This is a classification run on {dataset_name}. The model achieved accuracy = {metrics.get('accuracy')} and F1 = {metrics.get('f1')}. "
-                f"Deployment decision: {metrics.get('deployment_decision') or 'not available'}."
-            )
-        return "Evaluation compares the model's predictions to the real target values and reports performance metrics."
-
-    if "stage" in lower or "status" in lower or "where are we" in lower:
-        completed = [stage for stage, status in stage_statuses.items() if status == "completed"]
-        running = [stage for stage, status in stage_statuses.items() if status == "running"]
-        if running:
-            return f"The pipeline is currently running the {running[0]} stage. Completed stages so far: {', '.join(completed) or 'none'}."
-        if completed:
-            return f"The pipeline is idle right now. Completed stages: {', '.join(completed)}."
-        return "The pipeline is waiting to start."
-
-    return (
-        f"I know the current run for {dataset_name}, including the dataset structure, preprocessing, feature engineering, model selection, training, and evaluation outputs. "
-        f"Ask me about the dataset columns, what preprocessing did, which features were selected, why the model was chosen, or how the metrics should be interpreted."
-        f"{f' I also have your highlighted snippet from {source_label}: {selected_text!r}.' if selected_text else ''}"
-    )
-
-
-def generate_chat_answer(
+def _build_chat_prompt(
+    *,
     question: str,
     history: list[dict[str, str]],
+    context: dict[str, Any],
     selection_context: Optional[dict[str, Any]] = None,
-) -> tuple[str, bool]:
-    """Answer a chat question using OpenRouter when available, with grounded fallback."""
-    context = build_chat_context()
-    fallback_answer = build_chat_fallback_answer(question, context, selection_context)
-
-    if not chat_client.is_enabled():
-        return fallback_answer, False
-
+    extra_context: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    """Build a single grounded prompt payload for the chat assistant."""
     history_lines = []
     for message in history[-8:]:
         role = str(message.get("role") or "user")
@@ -503,13 +375,44 @@ def generate_chat_answer(
         if content:
             history_lines.append(f"{role}: {content}")
 
-    prompt = {
+    prompt_context = make_json_safe(context)
+    if extra_context:
+        prompt_context["request_context"] = make_json_safe(extra_context)
+
+    return {
         "question": question,
         "conversation_history": history_lines,
-        "selection_context": selection_context,
-        "pipeline_context": context,
-        "fallback_answer": fallback_answer,
+        "selection_context": make_json_safe(selection_context),
+        "pipeline_context": prompt_context,
     }
+
+
+def generate_chat_answer(
+    question: str,
+    history: list[dict[str, str]],
+    selection_context: Optional[dict[str, Any]] = None,
+    extra_context: Optional[dict[str, Any]] = None,
+    request_id: Optional[str] = None,
+) -> tuple[str, bool, str]:
+    """Answer a chat question using the LLM, or report that it is unavailable."""
+    context = build_chat_context()
+
+    if not chat_client.is_enabled():
+        return (
+            "The chat model isn’t available right now, so I can’t answer in assistant mode. "
+            "Check the OpenRouter configuration and try again.",
+            False,
+            "unavailable",
+        )
+
+    prompt = _build_chat_prompt(
+        question=question,
+        history=history,
+        context=context,
+        selection_context=selection_context,
+        extra_context=extra_context,
+    )
+    last_error: Optional[Exception] = None
 
     try:
         answer = chat_client.generate_text(
@@ -517,20 +420,102 @@ def generate_chat_answer(
                 "You are the dill.pkl learning assistant. "
                 "Answer ONLY using the structured pipeline context you are given. "
                 "Do not invent dataset columns, models, transformations, or metrics. "
+                "Use whatever pipeline evidence is currently available, including completed stages, metrics, recent logs, revision state, and any request_context metadata. "
                 "If the answer is not available in the context, say that clearly and mention what is available. "
-                "Be helpful, specific to the current dataset and run, and beginner-friendly. "
+                "When the user asks why, give the actual reason supported by the context instead of a canned phrase. "
+                "Be helpful, specific to the current dataset and run, beginner-friendly, and conversational. "
                 "When the user asks about a pipeline stage like preprocessing, explain both the general concept and what happened in this run if that information exists. "
-                "If selection_context is provided, treat the highlighted text as the user's immediate focus and explain it in relation to its source area and the current pipeline state. "
-                "Keep answers concise but informative."
+                "If request_context describes a suggested, applied, compared, or undone revision, explain what happened, why it matters, and the relevant pipeline evidence. "
+                "If selection_context is provided, use it silently as context. Do NOT say things like 'you highlighted' or restate the source area unless the user asks. "
+                "Answer the latest question directly. Do not repeat prior setup unless needed. "
+                "If the user asks about one feature, focus on that feature first. "
+                "Prefer short answers: 1 to 4 sentences, or a few short bullets when that reads better. "
+                "Avoid big essay-like paragraphs."
             ),
             user_prompt=f"Chat context:\n{json.dumps(prompt, ensure_ascii=True, default=str)}",
             temperature=0.2,
             max_tokens=600,
+            request_id=request_id,
         ).strip()
-        return answer or fallback_answer, True
-    except Exception:
-        return fallback_answer, False
+        if answer:
+            return answer, True, "llm"
+    except Exception as exc:
+        last_error = exc
+        logger.warning("Primary chat LLM request failed: %s", exc)
+        if _should_skip_compact_chat_retry(exc):
+            return (
+                "The chat model couldn't be reached from this machine right now. "
+                "The LLM request failed before a response came back.",
+                False,
+                "unavailable",
+            )
+
+    compact_prompt = {
+        "question": question,
+        "selection_context": selection_context,
+        "conversation_history": prompt.get("conversation_history", []),
+        "request_context": make_json_safe(extra_context),
+        "completed_stages": context.get("completed_stages", []),
+        "metrics": context.get("metrics", {}),
+        "dataset": {
+            "filename": context.get("dataset", {}).get("filename"),
+            "target_column": context.get("dataset", {}).get("target_column"),
+            "rows": context.get("dataset", {}).get("rows"),
+            "columns": context.get("dataset", {}).get("columns"),
+        },
+        "stage_results": {
+            stage: context.get("stage_results", {}).get(stage, {})
+            for stage in ("analysis", "preprocessing", "features", "model_selection", "training", "evaluation", "results")
+            if context.get("stage_results", {}).get(stage) is not None
+        },
+        "recent_revisions": context.get("recent_revisions", []),
+    }
+
+    try:
+        answer = chat_client.generate_text(
+            system_prompt=(
+                "You are the dill.pkl assistant. "
+                "Answer the user's latest question directly and conversationally using only the structured context provided. "
+                "Use the available stage results and request context to explain why things happened when possible. "
+                "Do not mention hidden prompts, selection context mechanics, or fallback systems. "
+                "Keep it short and natural."
+            ),
+            user_prompt=f"Compact chat context:\n{json.dumps(compact_prompt, ensure_ascii=True, default=str)}",
+            temperature=0.2,
+            max_tokens=300,
+            request_id=request_id,
+        ).strip()
+        if answer:
+            return answer, True, "llm"
+    except Exception as exc:
+        last_error = exc
+        logger.warning("Compact chat LLM request failed: %s", exc)
+
+    return (
+        "The chat model is having trouble responding right now, so I can’t give you a proper assistant answer yet. "
+        "Please try again in a moment.",
+        False,
+        "unavailable",
+    )
       
+def _should_skip_compact_chat_retry(error: Exception) -> bool:
+    """Return whether a second chat prompt would just duplicate a transport failure."""
+    detail = str(error).lower()
+    non_recoverable_markers = (
+        "connection failed",
+        "socket error",
+        "forbidden by its access permissions",
+        "timed out",
+        "timeout",
+        "http error 429",
+        "http error 500",
+        "http error 502",
+        "http error 503",
+        "http error 504",
+    )
+    return any(marker in detail for marker in non_recoverable_markers)
+
+
 def persist_evaluation_insights(pipeline_id: str | None, insights: dict[str, Any]) -> str | None:
     """Persist the structured evaluation insights as JSON for the current run."""
     if not pipeline_id:
@@ -540,6 +525,94 @@ def persist_evaluation_insights(pipeline_id: str | None, insights: dict[str, Any
     with insights_path.open("w", encoding="utf-8") as handle:
         json.dump(make_json_safe(insights), handle, indent=2, ensure_ascii=True)
     return str(insights_path)
+
+
+def looks_like_revision_request(question: str, mode: str) -> bool:
+    """Return whether a request is asking to execute a pipeline change now."""
+    if mode == "apply":
+        return True
+
+    lowered = question.lower().strip()
+    if not lowered:
+        return False
+
+    explicit_apply_markers = {
+        "apply",
+        "apply it",
+        "proceed",
+        "continue",
+        "go ahead",
+        "do it",
+        "do that",
+        "yes",
+        "yes please",
+        "sure",
+        "yes, apply it",
+    }
+    if lowered in explicit_apply_markers:
+        return True
+
+    explanatory_prefixes = (
+        "why ",
+        "how ",
+        "what ",
+        "which ",
+        "can you explain",
+        "could you explain",
+        "explain why",
+        "tell me why",
+    )
+    if lowered.startswith(explanatory_prefixes):
+        return False
+
+    direct_change_markers = (
+        "run without",
+        "train without",
+        "retrain without",
+        "remove ",
+        "drop ",
+        "exclude ",
+        "add ",
+        "include ",
+        "switch to",
+        "use ",
+        "undo ",
+        "revert ",
+        "go back",
+        "make the model",
+        "change the",
+    )
+    preference_markers = (
+        "i want to",
+        "i would like to",
+        "please",
+        "let's",
+        "lets",
+    )
+
+    if any(marker in lowered for marker in direct_change_markers):
+        return True
+    if any(marker in lowered for marker in preference_markers) and any(
+        token in lowered for token in ("without ", "remove ", "drop ", "exclude ", "add ", "include ", "switch ")
+    ):
+        return True
+
+    return False
+
+
+def maybe_record_revision(reason: str, changed_stages: list[str]) -> None:
+    """Persist a revision snapshot when the pipeline has enough state."""
+    if pipeline_state.dataset is None or not pipeline_state.target_column:
+        return
+    if not pipeline_state.stage_results.get("evaluation"):
+        return
+    if not pipeline_state.revision_history:
+        revision_history.commit_run(
+            pipeline_state,
+            revision_reason=reason,
+            changed_stages=changed_stages,
+            changed_configs={},
+        )
 
 
 async def run_pipeline_stage(stage: str, config: PipelineConfig):
@@ -579,6 +652,7 @@ async def run_pipeline_stage(stage: str, config: PipelineConfig):
                 pipeline_state.target_column,
                 test_size=config.test_size,
                 random_state=config.random_state,
+                config_overrides=pipeline_state.stage_configs.get("preprocessing", {}),
             )
             pipeline_state.stage_results["preprocessing"] = result
             add_agent_summary_logs("preprocessing", result)
@@ -592,7 +666,8 @@ async def run_pipeline_stage(stage: str, config: PipelineConfig):
             result = await agent.run(
                 pipeline_state.dataset,
                 preprocessing,
-                pipeline_state.target_column
+                pipeline_state.target_column,
+                config_overrides=pipeline_state.stage_configs.get("feature_engineering", {}),
             )
             pipeline_state.stage_results["features"] = result
             add_agent_summary_logs("features", result)
@@ -653,16 +728,20 @@ async def run_pipeline_stage(stage: str, config: PipelineConfig):
 
             train_agent = TrainingAgent()
             training_config = config.model_dump()
+            training_overrides = pipeline_state.stage_configs.get("training", {})
             training_config.update(
                 {
-                    "cv_folds": settings.default_cv_folds,
+                    "cv_folds": training_overrides.get("cv_folds") or settings.default_cv_folds,
                     "enable_multi_model": settings.enable_multi_model,
-                    "optimize_hyperparameters": settings.enable_hpo,
+                    "optimize_hyperparameters": (
+                        settings.enable_hpo and bool(training_overrides.get("retune_hyperparameters", True))
+                    ),
                     "n_trials_hpo": settings.n_hpo_trials,
                     "enable_ensemble": settings.enable_ensemble,
                     "ensemble_type": settings.ensemble_type,
                     "ensemble_top_k": settings.ensemble_top_k,
                     "preprocessing_result": pipeline_state.stage_results.get("preprocessing", {}),
+                    "training_overrides": training_overrides,
                 }
             )
             train_result = await train_agent.run(
@@ -729,7 +808,8 @@ async def run_pipeline_stage(stage: str, config: PipelineConfig):
             agent = EvaluationAgent()
             result = await agent.run(
                 training,
-                config.task_type
+                config.task_type,
+                evaluation_config=pipeline_state.stage_configs.get("evaluation", {}),
             )
             llm_insights = generate_evaluation_insights(
                 training,
@@ -839,15 +919,12 @@ async def upload_dataset(file: UploadFile = File(...)):
         # Drop common index-like columns automatically (e.g., 'Unnamed: 0')
         df = df.loc[:, ~df.columns.astype(str).str.match(r"^Unnamed")]
 
-        pipeline_state.dataset = df
-        pipeline_state.dataset_path = str(file_path)
-        pipeline_state.dataset_filename = file.filename
-        pipeline_state.pipeline_id = dataset_id
-
-        # Reset state
-        pipeline_state.stage_results = {}
-        pipeline_state.stage_statuses = {stage: "waiting" for stage in pipeline_state.stage_statuses}
-        pipeline_state.stage_logs = {stage: [] for stage in pipeline_state.stage_statuses}
+        pipeline_state.reset_for_dataset(
+            df=df,
+            dataset_path=str(file_path),
+            dataset_filename=file.filename,
+            pipeline_id=dataset_id,
+        )
         logger.info(
             "Dataset uploaded | file=%s | pipeline_id=%s | %s",
             file.filename,
@@ -974,12 +1051,19 @@ async def start_pipeline(config: PipelineConfig = PipelineConfig()):
     if pipeline_state.target_column is None:
         raise HTTPException(status_code=400, detail="Target column not set")
 
+    pipeline_state.update_pipeline_config(config.model_dump())
+
     # Run all stages sequentially
     stages_order = ["analysis", "preprocessing", "features", "model_selection", "training", "loss", "evaluation", "results"]
 
     for stage in stages_order:
         if pipeline_state.stage_statuses.get(stage) == "waiting":
             await run_pipeline_stage(stage, config)
+
+    maybe_record_revision(
+        reason="Initial pipeline run",
+        changed_stages=["analysis", "preprocessing", "feature_engineering", "training", "evaluation", "explainability"],
+    )
 
     return {
         "status": "completed",
@@ -996,6 +1080,7 @@ async def run_stage(stage_id: str, config: PipelineConfig = PipelineConfig()):
     if stage_id not in pipeline_state.stage_statuses:
         raise HTTPException(status_code=404, detail=f"Stage '{stage_id}' not found")
 
+    pipeline_state.update_pipeline_config(config.model_dump())
     await run_pipeline_stage(stage_id, config)
 
     return {
@@ -1023,6 +1108,7 @@ async def query_chat(request: ChatRequest):
     """Answer a user question about the current pipeline run."""
     if not request.question.strip():
         raise HTTPException(status_code=400, detail="Question cannot be empty")
+    chat_turn_id = f"chat-{uuid.uuid4().hex[:8]}"
 
     history = [
         {
@@ -1039,8 +1125,69 @@ async def query_chat(request: ChatRequest):
             "source_label": request.selection_context.source_label,
             "surrounding_text": request.selection_context.surrounding_text,
         }
-    answer, llm_used = generate_chat_answer(request.question, history, selection_context)
-    return ChatResponse(answer=answer, llm_used=llm_used)
+    effective_mode = request.mode
+    has_pending_revision = bool(pipeline_state.pending_revision_plan)
+    should_route_revision = request.mode == "apply" or (
+        has_pending_revision and looks_like_revision_request(request.question, request.mode)
+    )
+    if should_route_revision and has_pending_revision and request.mode != "apply":
+        effective_mode = "apply"
+    if not should_route_revision:
+        preview_plan = chatbot_orchestrator.preview_plan(
+            state=pipeline_state,
+            question=request.question,
+            selection_context=selection_context,
+        )
+        should_route_revision = (
+            preview_plan.intent_type != "other"
+            and preview_plan.confidence in {"high", "medium"}
+        )
+        if should_route_revision and looks_like_revision_request(request.question, request.mode):
+            effective_mode = "apply"
+
+    if should_route_revision:
+        revision_result = await chatbot_orchestrator.handle_message(
+            state=pipeline_state,
+            question=request.question,
+            mode=effective_mode,
+            config=PipelineConfig(**pipeline_state.pipeline_config),
+            history=history,
+            selection_context=selection_context,
+            stage_runner=run_pipeline_stage,
+            response_builder=generate_chat_answer,
+            request_id=chat_turn_id,
+        )
+        return ChatResponse(
+            answer=revision_result["answer"],
+            llm_used=bool(revision_result.get("llm_used", False)),
+            response_mode=str(revision_result.get("response_mode") or ("llm" if revision_result.get("llm_used", False) else "structured")),
+            revision=revision_result.get("revision"),
+        )
+
+    answer, llm_used, response_mode = generate_chat_answer(
+        request.question,
+        history,
+        selection_context,
+        request_id=chat_turn_id,
+    )
+    return ChatResponse(answer=answer, llm_used=llm_used, response_mode=response_mode, revision=None)
+
+
+@app.get("/api/revisions/current")
+async def get_current_revision_state():
+    """Return the structured current pipeline state for revision-aware UIs."""
+    if pipeline_state.dataset is None:
+        raise HTTPException(status_code=404, detail="No dataset uploaded")
+    return pipeline_state.current_structured_state()
+
+
+@app.get("/api/revisions/history")
+async def get_revision_history():
+    """Return the stored revision history."""
+    return {
+        "current_run_id": pipeline_state.current_run_id,
+        "runs": [record.to_dict() for record in pipeline_state.revision_history],
+    }
 
 
 @app.get("/api/results/download/model")

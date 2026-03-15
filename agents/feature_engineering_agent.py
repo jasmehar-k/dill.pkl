@@ -41,10 +41,48 @@ class FeatureEngineeringAgent(BaseAgent):
         n_features_to_select: int = 0,
         use_pca: bool = False,
         n_pca_components: Optional[int] = None,
+        config_overrides: Optional[dict[str, Any]] = None,
     ) -> dict[str, Any]:
         """Engineer features for the dataset."""
         try:
             logger.info("Engineering features for dataset with %s columns", len(df.columns))
+            config_overrides = config_overrides or {}
+            raw_correlation_threshold = config_overrides.get("correlation_threshold")
+            correlation_threshold = float(
+                self.CORRELATION_THRESHOLD
+                if raw_correlation_threshold is None
+                else raw_correlation_threshold
+            )
+            raw_importance_threshold = config_overrides.get("importance_threshold")
+            importance_threshold = float(
+                self.IMPORTANCE_THRESHOLD
+                if raw_importance_threshold is None
+                else raw_importance_threshold
+            )
+            raw_max_interactions = config_overrides.get("max_interaction_numeric_columns")
+            max_interaction_numeric_columns = int(
+                self.MAX_INTERACTION_NUMERIC_COLUMNS
+                if raw_max_interactions is None
+                else raw_max_interactions
+            )
+            include_features = [
+                str(feature) for feature in config_overrides.get("include_features", [])
+            ]
+            exclude_features = {
+                str(feature) for feature in config_overrides.get("exclude_features", [])
+            }
+            force_keep_engineered = {
+                str(feature) for feature in config_overrides.get("force_keep_engineered_features", [])
+            }
+            force_drop_engineered = {
+                str(feature) for feature in config_overrides.get("force_drop_engineered_features", [])
+            }
+            raw_use_interactions = config_overrides.get("use_interactions")
+            use_interactions = True if raw_use_interactions is None else bool(raw_use_interactions)
+            raw_use_pca = config_overrides.get("use_pca")
+            use_pca = use_pca if raw_use_pca is None else bool(raw_use_pca)
+            if "n_pca_components" in config_overrides and config_overrides.get("n_pca_components") is not None:
+                n_pca_components = config_overrides.get("n_pca_components")
 
             prepared_df = preprocessing.get("_feature_engineering_input_df")
             if isinstance(prepared_df, pd.DataFrame):
@@ -93,13 +131,17 @@ class FeatureEngineeringAgent(BaseAgent):
 
             numeric_columns, categorical_columns = self._get_feature_types(X)
 
-            duplicate_like_columns = self._find_duplicate_like_columns(X, numeric_columns)
+            duplicate_like_columns = self._find_duplicate_like_columns(
+                X,
+                numeric_columns,
+                correlation_threshold=correlation_threshold,
+            )
             if duplicate_like_columns:
                 X = X.drop(columns=duplicate_like_columns)
                 dropped_columns.extend(duplicate_like_columns)
                 applied_transformations.append({
                     "type": "correlation_filter",
-                    "threshold": self.CORRELATION_THRESHOLD,
+                    "threshold": correlation_threshold,
                     "columns": duplicate_like_columns,
                 })
 
@@ -152,7 +194,15 @@ class FeatureEngineeringAgent(BaseAgent):
 
             numeric_columns, categorical_columns = self._get_feature_types(X)
 
-            interaction_source_columns = self._select_interaction_columns(X, numeric_columns)
+            interaction_source_columns = (
+                self._select_interaction_columns(
+                    X,
+                    numeric_columns,
+                    max_interaction_numeric_columns=max_interaction_numeric_columns,
+                )
+                if use_interactions
+                else []
+            )
             if interaction_source_columns:
                 new_features = self._generate_interactions(X, interaction_source_columns)
                 if new_features:
@@ -163,13 +213,16 @@ class FeatureEngineeringAgent(BaseAgent):
                         "columns": new_features,
                     })
 
-            correlated_columns = self._find_high_correlation_columns(X)
+            correlated_columns = self._find_high_correlation_columns(
+                X,
+                correlation_threshold=correlation_threshold,
+            )
             if correlated_columns:
                 X = X.drop(columns=correlated_columns)
                 dropped_columns.extend(correlated_columns)
                 applied_transformations.append({
                     "type": "correlation_filter",
-                    "threshold": self.CORRELATION_THRESHOLD,
+                    "threshold": correlation_threshold,
                     "columns": correlated_columns,
                 })
 
@@ -195,18 +248,28 @@ class FeatureEngineeringAgent(BaseAgent):
                 feature_scores=feature_scores,
                 n_features_to_select=n_features_to_select,
                 target_column=target_column,
+                importance_threshold=importance_threshold,
             )
+            for feature_name in include_features:
+                if feature_name in X.columns and feature_name not in selected_features:
+                    selected_features.append(feature_name)
+            if force_keep_engineered:
+                for feature_name in sorted(force_keep_engineered):
+                    if feature_name in X.columns and feature_name not in selected_features:
+                        selected_features.append(feature_name)
 
             protected_base_features = self._collect_protected_base_features(selected_features, X.columns)
             low_importance_columns = [
                 column for column in X.columns
-                if column not in selected_features and column not in protected_base_features
+                if column not in selected_features
+                and column not in protected_base_features
+                and column not in force_keep_engineered
             ]
             if low_importance_columns:
                 dropped_columns.extend(low_importance_columns)
                 applied_transformations.append({
                     "type": "feature_importance_filter",
-                    "threshold": self.IMPORTANCE_THRESHOLD,
+                    "threshold": importance_threshold,
                     "columns": sorted(low_importance_columns),
                 })
 
@@ -214,6 +277,13 @@ class FeatureEngineeringAgent(BaseAgent):
                 set(selected_features).union(protected_base_features),
                 key=lambda column: list(X.columns).index(column),
             )
+            if exclude_features or force_drop_engineered:
+                blocked = exclude_features.union(force_drop_engineered)
+                selected_features = [
+                    column for column in selected_features
+                    if column not in blocked
+                ]
+                dropped_columns.extend(sorted(blocked.intersection(set(X.columns))))
 
             if n_features_to_select > 0 and len(selected_features) > n_features_to_select:
                 capped_features = self._apply_selection_cap(
@@ -284,8 +354,12 @@ class FeatureEngineeringAgent(BaseAgent):
                     "n_pca_components": n_pca_components,
                     "original_feature_count": len(df.columns) - (1 if target_column in df.columns else 0),
                     "post_engineering_feature_count": len(X.columns),
-                    "importance_threshold": self.IMPORTANCE_THRESHOLD,
-                    "max_interaction_numeric_columns": self.MAX_INTERACTION_NUMERIC_COLUMNS,
+                    "importance_threshold": importance_threshold,
+                    "correlation_threshold": correlation_threshold,
+                    "max_interaction_numeric_columns": max_interaction_numeric_columns,
+                    "include_features": include_features,
+                    "exclude_features": sorted(exclude_features),
+                    "use_interactions": use_interactions,
                 },
                 "numeric_features": selected_numeric,
                 "categorical_features": selected_categorical,
@@ -334,7 +408,13 @@ class FeatureEngineeringAgent(BaseAgent):
         categorical_columns = [column for column in X.columns if column not in numeric_columns]
         return numeric_columns, categorical_columns
 
-    def _select_interaction_columns(self, X: pd.DataFrame, numeric_columns: list[str]) -> list[str]:
+    def _select_interaction_columns(
+        self,
+        X: pd.DataFrame,
+        numeric_columns: list[str],
+        *,
+        max_interaction_numeric_columns: int,
+    ) -> list[str]:
         """Choose the top numeric columns by variance for interaction generation."""
         if not numeric_columns:
             return []
@@ -345,9 +425,15 @@ class FeatureEngineeringAgent(BaseAgent):
             key=lambda column: (-float(variances.get(column, 0.0)), column),
         )
         ranked = [column for column in ranked if float(variances.get(column, 0.0)) > 0.0]
-        return ranked[: self.MAX_INTERACTION_NUMERIC_COLUMNS]
+        return ranked[: max_interaction_numeric_columns]
 
-    def _find_duplicate_like_columns(self, X: pd.DataFrame, numeric_columns: list[str]) -> list[str]:
+    def _find_duplicate_like_columns(
+        self,
+        X: pd.DataFrame,
+        numeric_columns: list[str],
+        *,
+        correlation_threshold: float,
+    ) -> list[str]:
         """Drop obvious copy-like numeric columns when a base feature already exists."""
         duplicates: list[str] = []
         numeric_frame = X[numeric_columns].copy() if numeric_columns else pd.DataFrame(index=X.index)
@@ -379,7 +465,7 @@ class FeatureEngineeringAgent(BaseAgent):
             if aligned.empty:
                 continue
             correlation = aligned[column].corr(aligned[candidate])
-            if pd.notna(correlation) and float(abs(correlation)) >= self.CORRELATION_THRESHOLD:
+            if pd.notna(correlation) and float(abs(correlation)) >= correlation_threshold:
                 duplicates.append(column)
 
         return sorted(dict.fromkeys(duplicates))
@@ -410,7 +496,12 @@ class FeatureEngineeringAgent(BaseAgent):
 
         return generated
 
-    def _find_high_correlation_columns(self, X: pd.DataFrame) -> list[str]:
+    def _find_high_correlation_columns(
+        self,
+        X: pd.DataFrame,
+        *,
+        correlation_threshold: float,
+    ) -> list[str]:
         """Find redundant columns while preferring simpler/original features."""
         numeric_frame = X.select_dtypes(include=[np.number])
         if numeric_frame.empty:
@@ -428,7 +519,7 @@ class FeatureEngineeringAgent(BaseAgent):
                 if right in columns_to_drop:
                     continue
                 correlation = correlation_matrix.loc[left, right]
-                if pd.isna(correlation) or float(correlation) <= self.CORRELATION_THRESHOLD:
+                if pd.isna(correlation) or float(correlation) <= correlation_threshold:
                     continue
                 columns_to_drop.add(self._choose_correlated_drop(left, right, variances))
 
@@ -507,11 +598,12 @@ class FeatureEngineeringAgent(BaseAgent):
         feature_scores: dict[str, float],
         n_features_to_select: int,
         target_column: str,
+        importance_threshold: float,
     ) -> list[str]:
         """Select important features and retain base columns for selected interactions."""
         initial_selected = [
             column for column in X.columns
-            if column != target_column and feature_scores.get(column, 0.0) >= self.IMPORTANCE_THRESHOLD
+            if column != target_column and feature_scores.get(column, 0.0) >= importance_threshold
         ]
 
         if not initial_selected and len(X.columns) > 0:
