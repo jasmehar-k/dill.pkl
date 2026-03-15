@@ -3,15 +3,15 @@
 This module provides Bayesian optimization for model hyperparameters using Optuna.
 """
 
-import logging
 from typing import Any, Callable, Optional
 
 import numpy as np
 from sklearn.model_selection import cross_val_score
 
 from agents.training_agent import TrainingAgent
+from utils.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 try:
     import optuna  # type: ignore
@@ -80,6 +80,9 @@ class HyperparameterOptimizer:
         """
         if optuna is None:
             raise RuntimeError("Optuna is not installed. Install optuna or disable HPO.")
+
+        optuna.logging.disable_default_handler()
+        optuna.logging.set_verbosity(optuna.logging.CRITICAL)
 
         if not self._training_agent._is_model_available(model_name):
             raise RuntimeError(f"Model '{model_name}' is not available in this environment.")

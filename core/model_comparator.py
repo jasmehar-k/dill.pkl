@@ -5,7 +5,6 @@ using cross-validation to select the best model based on both performance and st
 """
 
 import asyncio
-import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Optional
@@ -16,7 +15,9 @@ from sklearn.model_selection import cross_val_score, cross_val_predict
 from sklearn.metrics import get_scorer
 
 from agents.training_agent import TrainingAgent
-logger = logging.getLogger(__name__)
+from utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 class ModelComparator:

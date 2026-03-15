@@ -31,6 +31,26 @@ interface FloatingSelection extends ChatSelectionContext {
   y: number;
 }
 
+const buildChatHistory = (messages: Message[]) => {
+  const sanitized: Array<{ role: "user" | "assistant"; content: string }> = [];
+
+  for (const message of messages) {
+    if (message.role === "assistant" && message.source === "unavailable") {
+      if (sanitized.length > 0 && sanitized[sanitized.length - 1].role === "user") {
+        sanitized.pop();
+      }
+      continue;
+    }
+
+    sanitized.push({
+      role: message.role,
+      content: message.content,
+    });
+  }
+
+  return sanitized.slice(-8);
+};
+
 const ChatBot = ({
   datasetName,
   targetColumn,
@@ -236,15 +256,12 @@ const ChatBot = ({
       if (onPipelineRefresh) {
         refreshInterval = window.setInterval(() => {
           void onPipelineRefresh();
-        }, 900);
+        }, 250);
       }
     }
 
     try {
-      const history = messages.slice(-8).map((message) => ({
-        role: message.role,
-        content: message.content,
-      }));
+      const history = buildChatHistory(messages);
       const response = await queryChat(trimmed, history, pinnedContext, mode);
       const revision = response.revision as Record<string, unknown> | null | undefined;
       didApplyRevision = revision?.applied === true;

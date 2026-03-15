@@ -145,13 +145,10 @@ class ModelSelectionAgent(BaseAgent):
             llm_returned = bool(llm_selection)
 
             if not llm_selection:
-                print("Model selection LLM did not return a result; falling back to default selection.")
                 llm_selection = {
                     "top_candidates": top_candidates,
                     "selection_reasoning": selection_reasoning,
                 }
-            else:
-                print("Model selection LLM returned a result; using LLM selection.")
 
             merged_candidates = self._merge_candidate_selection(
                 default_candidates=top_candidates,

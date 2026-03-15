@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any, Awaitable, Callable
 
@@ -71,7 +72,9 @@ class DependencyAwareRerunEngine:
         )
         self.reset_downstream_state(state, canonical_start, canonical_rerun_stages, rerun_stages)
         for stage in rerun_stages:
+            await asyncio.sleep(0)
             await stage_runner(stage, config)
+            await asyncio.sleep(0.2)
         logger.info(
             "Revision rerun completed from canonical_stage=%s | concrete_rerun=%s",
             canonical_start,

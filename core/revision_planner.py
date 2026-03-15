@@ -6,6 +6,7 @@ from dataclasses import asdict, dataclass
 import re
 from typing import Any, Optional
 
+from config import settings
 from core.pipeline_state import CANONICAL_STAGE_ORDER, normalize_stage_name
 from utils.openrouter_client import OpenRouterClient
 
@@ -32,7 +33,7 @@ class RevisionPlanner:
     """Map grounded user requests to safe deterministic actions."""
 
     def __init__(self) -> None:
-        self._llm = OpenRouterClient("RevisionPlanner")
+        self._llm = OpenRouterClient("RevisionPlanner", model_name=settings.chat_model_name)
 
     def plan(
         self,

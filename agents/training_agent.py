@@ -8,7 +8,6 @@ This agent handles model training including:
 - Ensemble support
 """
 
-import logging
 import time
 from typing import Any, Optional
 
@@ -26,8 +25,9 @@ from sklearn.svm import SVC, SVR
 
 from agents.base_agent import BaseAgent
 from core.exceptions import AgentExecutionError
+from utils.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class TrainingAgent(BaseAgent):
@@ -818,10 +818,12 @@ class TrainingAgent(BaseAgent):
         elif "xgboost" in model_name:
             try:
                 import xgboost as xgb
+                params = dict(hyperparameters)
+                params.setdefault("verbosity", 0)
                 if task_type == "classification":
-                    return xgb.XGBClassifier(**hyperparameters)
+                    return xgb.XGBClassifier(**params)
                 else:
-                    return xgb.XGBRegressor(**hyperparameters)
+                    return xgb.XGBRegressor(**params)
             except (ImportError, ModuleNotFoundError) as e:
                 raise RuntimeError(
                     "XGBoost is not available. Install xgboost and the OpenMP runtime (libomp) to use this model."
@@ -830,6 +832,8 @@ class TrainingAgent(BaseAgent):
             try:
                 import lightgbm as lgb
                 params = dict(hyperparameters)
+                params.setdefault("verbosity", -1)
+                params.setdefault("verbose", -1)
                 if task_type == "classification":
                     return lgb.LGBMClassifier(**params)
                 else:

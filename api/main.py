@@ -6,6 +6,7 @@ and retrieve results.
 """
 
 import json
+import logging
 import os
 import shutil
 import uuid
@@ -33,6 +34,9 @@ from core.revision_history import RevisionHistoryManager
 from utils.logger import get_logger
 from utils.openrouter_client import OpenRouterClient
 from utils.evaluation_insights import generate_evaluation_insights
+
+logging.getLogger("uvicorn.access").disabled = True
+logging.getLogger("uvicorn.access").propagate = False
 
 # Ensure outputs directory exists
 OUTPUTS_DIR = Path("outputs")
@@ -147,6 +151,91 @@ class EvaluationInsightsResponse(BaseModel):
     llm_used: bool
     model: str
     error: Optional[str] = None
+
+
+class ChatStatusResponse(BaseModel):
+    status: str
+    detail: Optional[str] = None
+    last_checked_at: Optional[str] = None
+
+
+CHAT_CONTEXT_OMIT_KEYS = {
+    "X_train",
+    "X_test",
+    "y_train",
+    "y_test",
+    "model",
+    "oof_predictions",
+    "deployment_code",
+    "package_path",
+    "report_path",
+    "model_path",
+    "metadata_path",
+    "correlations",
+}
+
+
+def _truncate_text(value: str, max_chars: int = 500) -> str:
+    """Trim oversized strings so chat prompts stay within a reasonable size."""
+    text = str(value or "").strip()
+    if len(text) <= max_chars:
+        return text
+    return f"{text[:max_chars].rstrip()}…"
+
+
+def _compact_chat_value(value: Any, depth: int = 0) -> Any:
+    """Recursively compact chat context payloads to avoid oversized prompts."""
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, str):
+        return _truncate_chat_text(value, 900 if depth == 0 else 320)
+    if isinstance(value, dict):
+        max_items = 18 if depth == 0 else 8
+        compacted: dict[str, Any] = {}
+        kept = 0
+        total = 0
+        for key, item in value.items():
+            key_text = str(key)
+            if key_text in CHAT_CONTEXT_OMIT_KEYS or key_text.startswith("_"):
+                continue
+            total += 1
+            if kept >= max_items:
+                continue
+            compacted[key_text] = _compact_chat_value(item, depth + 1)
+            kept += 1
+        if total > kept:
+            compacted["_truncated"] = f"{total - kept} additional field(s) omitted"
+        return compacted
+    if isinstance(value, (list, tuple, set)):
+        items = list(value)
+        max_items = 10 if depth == 0 else 6
+        compacted = [_compact_chat_value(item, depth + 1) for item in items[:max_items]]
+        if len(items) > max_items:
+            compacted.append(f"... {len(items) - max_items} more item(s)")
+        return compacted
+    return _truncate_chat_text(str(value), 320)
+
+
+def _truncate_chat_text(value: str, max_chars: int = 500) -> str:
+    """ASCII-only truncation helper used by chat context compaction."""
+    text = str(value or "").strip()
+    if len(text) <= max_chars:
+        return text
+    return f"{text[:max_chars].rstrip()}..."
+
+
+chat_runtime_status: dict[str, Optional[str]] = {
+    "status": "responsive" if chat_client.is_enabled() else "unavailable",
+    "detail": None if chat_client.is_enabled() else "Chat model not configured.",
+    "last_checked_at": None,
+}
+
+
+def _set_chat_runtime_status(status: str, detail: Optional[str] = None) -> None:
+    """Persist the latest observed chat-model health."""
+    chat_runtime_status["status"] = status
+    chat_runtime_status["detail"] = detail
+    chat_runtime_status["last_checked_at"] = datetime.now(timezone.utc).isoformat()
 
 
 # Helper functions
@@ -310,7 +399,7 @@ def build_chat_context() -> dict[str, Any]:
         "filename": pipeline_state.dataset_filename,
         "rows": int(len(df)) if df is not None else None,
         "columns": int(len(df.columns)) if df is not None else None,
-        "column_names": [str(column) for column in df.columns] if df is not None else [],
+        "column_names": [str(column) for column in df.columns[:25]] if df is not None else [],
         "target_column": pipeline_state.target_column,
         "preview_rows": [],
         "columns_info": [],
@@ -321,7 +410,7 @@ def build_chat_context() -> dict[str, Any]:
     if df is not None:
         preview_df = df.head(3).fillna("")
         dataset_summary["preview_rows"] = preview_df.to_dict(orient="records")
-        for column in df.columns:
+        for column in df.columns[:20]:
             series = df[column]
             is_numeric = bool(pd.api.types.is_numeric_dtype(series))
             column_info = {
@@ -338,12 +427,12 @@ def build_chat_context() -> dict[str, Any]:
                 dataset_summary["categorical_columns"].append(str(column))
 
     stage_results = {
-        stage: summarize_stage_result(stage, result)
+        stage: _compact_chat_value(summarize_stage_result(stage, result))
         for stage, result in pipeline_state.stage_results.items()
         if stage in pipeline_state.stage_statuses
     }
     recent_logs = {
-        stage: logs[-5:]
+        stage: [_truncate_chat_text(message, 220) for message in logs[-3:]]
         for stage, logs in pipeline_state.stage_logs.items()
         if logs
     }
@@ -364,6 +453,7 @@ def build_chat_context() -> dict[str, Any]:
     ]
     evaluation = pipeline_state.stage_results.get("evaluation", {}) or {}
     training = pipeline_state.stage_results.get("training", {}) or {}
+    explanation = pipeline_state.stage_results.get("explanation", {}) or {}
 
     return {
         "dataset": dataset_summary,
@@ -371,7 +461,19 @@ def build_chat_context() -> dict[str, Any]:
         "completed_stages": completed_stages,
         "stage_results": stage_results,
         "recent_logs": recent_logs,
-        "current_run": make_json_safe(pipeline_state.current_structured_state()),
+        "current_run": {
+            "run_id": pipeline_state.current_run_id,
+            "target_column": pipeline_state.target_column,
+            "task_type": pipeline_state.task_type,
+            "revision_reason": pipeline_state.revision_history[-1].revision_reason if pipeline_state.revision_history else None,
+            "changed_stages": pipeline_state.revision_history[-1].changed_stages if pipeline_state.revision_history else [],
+            "metrics": _compact_chat_value(pipeline_state.metrics_summary()),
+        },
+        "explanation": _compact_chat_value({
+            "summary": explanation.get("summary"),
+            "pipeline_summary": explanation.get("pipeline_summary"),
+            "explanations": explanation.get("explanations"),
+        }),
         "pending_revision_plan": make_json_safe(pipeline_state.pending_revision_plan),
         "recent_revisions": make_json_safe(revision_history_summary),
         "metrics": {
@@ -1420,4 +1522,4 @@ async def get_explanation():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8000, access_log=False)

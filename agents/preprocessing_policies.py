@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import re
+import warnings
 from typing import Any, Optional
 
 import numpy as np
@@ -712,7 +713,13 @@ def _looks_like_datetime(series: pd.Series) -> bool:
     if sample.str.fullmatch(r"\d+").mean() > 0.9:
         return False
 
-    parsed = pd.to_datetime(sample, errors="coerce")
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message="Could not infer format, so each element will be parsed individually, falling back to `dateutil`.*",
+            category=UserWarning,
+        )
+        parsed = pd.to_datetime(sample, errors="coerce")
     success_rate = float(parsed.notna().mean())
     return success_rate >= 0.8
 

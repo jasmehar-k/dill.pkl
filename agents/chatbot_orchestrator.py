@@ -544,7 +544,7 @@ class ChatbotOrchestrator:
                     extra_context=extra_context,
                     request_id=request_id,
                 )
-                if answer:
+                if answer and response_mode != "unavailable":
                     return {
                         "answer": answer,
                         "llm_used": llm_used,
