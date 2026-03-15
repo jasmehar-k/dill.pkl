@@ -8,7 +8,7 @@ Most dev teams sit on data worth predicting from and never act on it. Not becaus
 
 Upload a dataset. Pick a target column. A team of AI agents handles the rest (analysis, feature engineering, model selection, training, evaluation, and deployment) while logging every decision it makes so you can inspect, trust, and ship the result.
 
-And when the pipeline finishes, you're not done interacting with it. A conversational chatbot agent sits on top of the entire system, letting you modify, rerun, and interrogate the pipeline through natural language. Ask why a feature was selected. Undo a change. Compare two runs. It plans the revision, executes the affected stages, and tracks the full history, so every experiment is reproducible and nothing is lost.
+And when the pipeline finishes, you're not done interacting with it. A conversational chatbot agent sits on top of the entire system, letting you modify, rerun, and interrogate the pipeline through natural language. Ask why a feature was selected. Undo a change. Compare two models. It plans the revision, executes the affected stages, and tracks the full history, so every experiment is reproducible and nothing is lost.
 
 No ML background required. No black box you can't interrogate. No hand-off to a specialist.
 
