@@ -10,7 +10,9 @@ interface StageVisualizationProps {
 }
 
 const EmptyState = ({ message }: { message: string }) => (
-  <p className="py-8 text-center text-sm text-muted-foreground">{message}</p>
+  <div className="rounded-2xl border border-dashed border-border/60 p-6 text-center text-sm text-muted-foreground">
+    {message}
+  </div>
 );
 
 const Heatmap = ({ stageResult }: { stageResult: Record<string, unknown> | null }) => {
@@ -22,18 +24,18 @@ const Heatmap = ({ stageResult }: { stageResult: Record<string, unknown> | null 
   }
 
   return (
-    <div className="space-y-1">
-      <div className="flex gap-1">
+    <div className="space-y-2">
+      <div className="flex gap-2">
         <div className="w-12" />
         {labels.map((label) => (
-          <div key={label} className="w-12 truncate text-center text-[10px] text-muted-foreground">
+          <div key={label} className="w-12 truncate text-center text-[11px] uppercase tracking-[0.18em] text-muted-foreground">
             {label}
           </div>
         ))}
       </div>
       {labels.map((rowLabel) => (
-        <div key={rowLabel} className="flex items-center gap-1">
-          <div className="w-12 truncate pr-1 text-right text-[10px] text-muted-foreground">{rowLabel}</div>
+        <div key={rowLabel} className="flex items-center gap-2">
+          <div className="w-12 truncate pr-1 text-right text-[11px] uppercase tracking-[0.18em] text-muted-foreground">{rowLabel}</div>
           {labels.map((columnLabel) => {
             const raw = correlations[rowLabel]?.[columnLabel] ?? 0;
             const value = Number(raw);
@@ -41,7 +43,7 @@ const Heatmap = ({ stageResult }: { stageResult: Record<string, unknown> | null 
             return (
               <div
                 key={`${rowLabel}-${columnLabel}`}
-                className="flex h-10 w-12 items-center justify-center rounded-sm font-mono text-[10px] text-foreground/80"
+                className="flex h-12 w-14 items-center justify-center rounded-xl border border-border/50 font-mono text-[11px] text-foreground/80"
                 style={{ backgroundColor: `hsl(${hue} 80% 60% / ${Math.abs(value) * 0.6})` }}
               >
                 {value.toFixed(1)}
@@ -146,12 +148,12 @@ const DataTable = ({ datasetSummary }: { datasetSummary: DatasetSummary | null }
   ]);
 
   return (
-    <div className="overflow-x-auto">
+    <div className="overflow-x-auto rounded-2xl border border-border/60 bg-background/35">
       <table className="w-full font-mono text-[11px]">
         <thead>
-          <tr className="border-b border-border/50">
+          <tr className="border-b border-border/60 bg-background/40">
             {["feature", "missing", "type"].map((column) => (
-              <th key={column} className="px-2 py-1 text-left font-medium text-muted-foreground">
+              <th key={column} className="px-3 py-2 text-left font-medium uppercase tracking-[0.18em] text-muted-foreground">
                 {column}
               </th>
             ))}
@@ -159,9 +161,9 @@ const DataTable = ({ datasetSummary }: { datasetSummary: DatasetSummary | null }
         </thead>
         <tbody>
           {rows.map((row) => (
-            <tr key={row[0]} className="border-b border-border/20">
+            <tr key={row[0]} className="border-b border-border/30 last:border-b-0">
               {row.map((cell) => (
-                <td key={cell} className="px-2 py-1 text-foreground/80">
+                <td key={cell} className="px-3 py-2 text-foreground/85">
                   {cell}
                 </td>
               ))}

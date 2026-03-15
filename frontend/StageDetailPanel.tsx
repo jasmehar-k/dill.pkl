@@ -126,27 +126,41 @@ const StageDetailPanel = ({
                 />
               ) : (
                 <>
-                  <div className="space-y-2">
-                    <h3 className="text-sm font-medium text-accent">About this stage</h3>
-                    <p className="text-sm leading-relaxed text-secondary-foreground">{aboutText}</p>
+                  <div className={isResults ? "space-y-3" : "space-y-2"}>
+                    <h3
+                      className={
+                        isResults
+                          ? "text-xs font-semibold uppercase tracking-[0.22em] text-muted-foreground"
+                          : "text-sm font-medium text-accent"
+                      }
+                    >
+                      About this stage
+                    </h3>
+                    {isResults ? (
+                      <div className="glass-card border-border/60 p-5">
+                        <p className="text-sm leading-7 text-secondary-foreground">{aboutText}</p>
+                      </div>
+                    ) : (
+                      <p className="text-sm leading-relaxed text-secondary-foreground">{aboutText}</p>
+                    )}
                   </div>
 
                   {!isPreprocessing && !isModelSelection && <StageSummaryCard stage={stage} stageResult={stageResult} />}
 
                   {isResults && (explanationSummary || pipelineSummary || explanationBullets.length > 0) && (
                     <div className="space-y-3">
-                      <h3 className="text-sm font-medium text-accent">Pipeline recap</h3>
+                      <h3 className="text-xs font-semibold uppercase tracking-[0.22em] text-muted-foreground">Pipeline Recap</h3>
                       {(summaryText.length > 0 || summaryBullets.length > 0 || summaryDecision) && (
-                        <div className="glass-card space-y-2 p-4 text-[11px] text-secondary-foreground">
+                        <div className="glass-card border-border/60 p-5 text-[11px] text-secondary-foreground">
                           {summaryText.map((line) => (
-                            <p key={line} className="text-secondary-foreground">
+                            <p key={line} className="leading-7 text-secondary-foreground">
                               {line}
                             </p>
                           ))}
                           {summaryBullets.length > 0 && (
-                            <div className="space-y-1">
+                            <div className="space-y-3">
                               {summaryBullets.map((item, index) => (
-                                <div key={`${item}-${index}`} className="flex items-start gap-2">
+                                <div key={`${item}-${index}`} className="flex items-start gap-3 rounded-2xl border border-border/60 bg-background/35 px-4 py-3">
                                   <span className="text-accent">•</span>
                                   <span>{item}</span>
                                 </div>
@@ -154,17 +168,17 @@ const StageDetailPanel = ({
                             </div>
                           )}
                           {summaryDecision && (
-                            <p className="text-[11px] font-semibold uppercase tracking-wide text-primary">
+                            <div className="rounded-2xl border border-primary/20 bg-primary/10 px-4 py-3 text-[11px] font-semibold uppercase tracking-[0.18em] text-primary">
                               {summaryDecision}
-                            </p>
+                            </div>
                           )}
                         </div>
                       )}
 
                       {explanationBullets.length > 0 && (
-                        <div className="glass-card space-y-1 p-4 text-[11px] text-secondary-foreground">
+                        <div className="glass-card space-y-3 border-border/60 p-5 text-[11px] text-secondary-foreground">
                           {explanationBullets.map((item, index) => (
-                            <div key={`${item}-${index}`} className="flex items-start gap-2">
+                            <div key={`${item}-${index}`} className="flex items-start gap-3 rounded-2xl border border-border/60 bg-background/35 px-4 py-3">
                               <span className="text-accent">•</span>
                               <span>{item}</span>
                             </div>
@@ -173,9 +187,9 @@ const StageDetailPanel = ({
                       )}
 
                       {pipelineLines.length > 0 && (
-                        <div className="glass-card space-y-1 p-4 text-[11px] text-secondary-foreground">
+                        <div className="glass-card space-y-3 border-border/60 p-5 text-[11px] text-secondary-foreground">
                           {pipelineLines.map((line, index) => (
-                            <div key={`${line}-${index}`} className="flex items-start gap-2">
+                            <div key={`${line}-${index}`} className="flex items-start gap-3 rounded-2xl border border-border/60 bg-background/35 px-4 py-3">
                               <span className="text-accent">•</span>
                               <span>{line}</span>
                             </div>
@@ -187,12 +201,33 @@ const StageDetailPanel = ({
 
                   {highlights.length > 0 && !isModelSelection && (
                     <div className="space-y-3">
-                      <h3 className="text-sm font-medium text-accent">Stage highlights</h3>
-                      <div className="grid grid-cols-2 gap-2">
+                      <h3
+                        className={
+                          isResults
+                            ? "text-xs font-semibold uppercase tracking-[0.22em] text-muted-foreground"
+                            : "text-sm font-medium text-accent"
+                        }
+                      >
+                        Stage highlights
+                      </h3>
+                      <div className={isResults ? "grid gap-3 md:grid-cols-3" : "grid grid-cols-2 gap-2"}>
                         {highlights.map((highlight) => (
-                          <div key={highlight.label} className="glass-card space-y-1 p-3">
-                            <p className="text-[10px] text-muted-foreground">{highlight.label}</p>
-                            <p className="font-mono text-sm text-foreground">{highlight.value}</p>
+                          <div
+                            key={highlight.label}
+                            className={isResults ? "rounded-2xl border border-border/60 bg-background/35 p-4" : "glass-card space-y-1 p-3"}
+                          >
+                            <p
+                              className={
+                                isResults
+                                  ? "text-[11px] uppercase tracking-[0.2em] text-muted-foreground"
+                                  : "text-[10px] text-muted-foreground"
+                              }
+                            >
+                              {highlight.label}
+                            </p>
+                            <p className={isResults ? "mt-2 font-mono text-sm text-foreground" : "font-mono text-sm text-foreground"}>
+                              {highlight.value}
+                            </p>
                           </div>
                         ))}
                       </div>
@@ -202,8 +237,8 @@ const StageDetailPanel = ({
                   {stage.id === "training" && buildTrainingComparisonPanel(stageResult)}
 
                   {stage.id === "analysis" && (
-                    <div className="space-y-2">
-                      <h3 className="text-sm font-medium text-accent">Dataset overview</h3>
+                    <div className="space-y-3">
+                      <h3 className="text-xs font-semibold uppercase tracking-[0.22em] text-muted-foreground">Dataset Overview</h3>
                       <DatasetSummaryCard
                         summary={datasetSummary}
                         columns={datasetColumns}
@@ -215,9 +250,9 @@ const StageDetailPanel = ({
                   {stage.id === "analysis" && buildAnalysisQualityPanel(stageResult)}
 
                   {stage.id === "analysis" && (stageResult?.correlations as Record<string, unknown> | undefined) && (
-                    <div className="space-y-2">
-                      <h3 className="text-sm font-medium text-accent">Correlation heatmap</h3>
-                      <div className="glass-card p-4">
+                    <div className="space-y-3">
+                      <h3 className="text-xs font-semibold uppercase tracking-[0.22em] text-muted-foreground">Correlation Heatmap</h3>
+                      <div className="glass-card border-border/60 p-5">
                         <StageVisualization
                           stage={stage}
                           stageResult={stageResult}
@@ -233,9 +268,9 @@ const StageDetailPanel = ({
                   {isPreprocessing ? (
                     <>
                       {!isResults && (
-                        <div className="space-y-2">
-                          <h3 className="text-sm font-medium text-accent">Dataset overview</h3>
-                          <div className="glass-card p-4">
+                        <div className="space-y-3">
+                          <h3 className="text-xs font-semibold uppercase tracking-[0.22em] text-muted-foreground">Dataset Overview</h3>
+                          <div className="glass-card border-border/60 p-5">
                             <StageVisualization
                               stage={stage}
                               stageResult={stageResult}
@@ -247,17 +282,17 @@ const StageDetailPanel = ({
                       )}
 
                       {!isResults && (
-                        <div className="space-y-2">
-                          <h3 className="text-sm font-medium text-accent">How we prepared your data</h3>
-                          <div className="glass-card space-y-2 p-4 text-sm leading-relaxed text-secondary-foreground">
+                        <div className="space-y-3">
+                          <h3 className="text-xs font-semibold uppercase tracking-[0.22em] text-muted-foreground">How We Prepared Your Data</h3>
+                          <div className="glass-card border-border/60 p-5 text-sm leading-relaxed text-secondary-foreground">
                             <PreprocessExplanation stageResult={stageResult} datasetSummary={datasetSummary} />
                           </div>
                         </div>
                       )}
 
                       {!isResults && (
-                        <div className="space-y-2">
-                          <h3 className="text-sm font-medium text-accent">Dataset preview</h3>
+                        <div className="space-y-3">
+                          <h3 className="text-xs font-semibold uppercase tracking-[0.22em] text-muted-foreground">Dataset Preview</h3>
                           <DatasetPreviewCard datasetPreview={datasetPreview} isLoadingPreview={isLoadingDatasetPreview} />
                         </div>
                       )}
@@ -286,33 +321,43 @@ const DatasetPreviewCard = ({
   datasetPreview: DatasetPreviewResponse | null;
   isLoadingPreview: boolean;
 }) => (
-  <div className="glass-card overflow-auto p-3">
-    {isLoadingPreview && <p className="text-sm text-muted-foreground">Loading sample rows...</p>}
+  <div className="glass-card border-border/60 p-5">
+    {isLoadingPreview && (
+      <div className="rounded-2xl border border-dashed border-border/60 p-6 text-sm text-muted-foreground">
+        Loading sample rows...
+      </div>
+    )}
     {!isLoadingPreview && datasetPreview && datasetPreview.rows.length > 0 ? (
-      <table className="min-w-full text-left text-[11px]">
-        <thead className="text-muted-foreground">
-          <tr>
-            {datasetPreview.columns.map((column) => (
-              <th key={column} className="px-2 py-1 font-medium">
-                {column}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {datasetPreview.rows.map((row, rowIndex) => (
-            <tr key={rowIndex} className="border-b border-border/50">
+      <div className="overflow-auto rounded-2xl border border-border/60 bg-background/35">
+        <table className="min-w-full text-left text-[11px]">
+          <thead className="bg-background/40 text-muted-foreground">
+            <tr className="border-b border-border/60">
               {datasetPreview.columns.map((column) => (
-                <td key={column} className="px-2 py-1">
-                  {String(row[column] ?? "")}
-                </td>
+                <th key={column} className="px-3 py-2 font-medium uppercase tracking-[0.18em]">
+                  {column}
+                </th>
               ))}
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {datasetPreview.rows.map((row, rowIndex) => (
+              <tr key={rowIndex} className="border-b border-border/30 last:border-b-0">
+                {datasetPreview.columns.map((column) => (
+                  <td key={column} className="px-3 py-2 text-foreground/85">
+                    {String(row[column] ?? "")}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     ) : (
-      !isLoadingPreview && <p className="text-sm text-muted-foreground">Preview not available.</p>
+      !isLoadingPreview && (
+        <div className="rounded-2xl border border-dashed border-border/60 p-6 text-sm text-muted-foreground">
+          Preview not available.
+        </div>
+      )
     )}
   </div>
 );
@@ -325,25 +370,25 @@ const StageLogs = ({ stage, stageLogs, stageResult, metrics }: { stage: Pipeline
     const cv = metrics?.best_score ?? (stageResult?.best_score as number | undefined);
     const test = metrics?.r2 ?? (stageResult?.test_score as number | undefined);
     return (
-      <div className="space-y-2">
-        <h3 className="text-sm font-medium text-accent">How the model was trained</h3>
-        <div className="glass-card space-y-2 p-4 text-sm leading-relaxed text-secondary-foreground">
-          <p>
+      <div className="glass-card border-border/60 p-5">
+        <h3 className="text-xs font-semibold uppercase tracking-[0.22em] text-muted-foreground">How the Model Was Trained</h3>
+        <div className="mt-5 space-y-3">
+          <div className="rounded-2xl border border-primary/20 bg-primary/10 p-4 text-sm leading-7 text-secondary-foreground">
             The system evaluated several models and trained {model} because it performed best on the dataset. It learned from{" "}
             {trainRows ? trainRows.toLocaleString() : "the"} training rows and kept {testRows ? testRows.toLocaleString() : "some"} rows aside for testing.
-          </p>
-          <ul className="ml-4 list-disc space-y-1">
-            <li>Used cross-validation to check performance: {typeof cv === "number" ? cv.toFixed(3) : "n/a"} R².</li>
-            <li>Held-out test performance: {typeof test === "number" ? test.toFixed(3) : "n/a"} R².</li>
-            <li>Learned how features relate to the target to make price predictions.</li>
-          </ul>
+          </div>
+          <div className="space-y-3">
+            <div className="rounded-2xl border border-border/60 bg-background/35 px-4 py-3 text-sm leading-7 text-secondary-foreground">Used cross-validation to check performance: {typeof cv === "number" ? cv.toFixed(3) : "n/a"} R².</div>
+            <div className="rounded-2xl border border-border/60 bg-background/35 px-4 py-3 text-sm leading-7 text-secondary-foreground">Held-out test performance: {typeof test === "number" ? test.toFixed(3) : "n/a"} R².</div>
+            <div className="rounded-2xl border border-border/60 bg-background/35 px-4 py-3 text-sm leading-7 text-secondary-foreground">Learned how features relate to the target to make price predictions.</div>
+          </div>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="space-y-2">
+    <div className="space-y-4">
       <h3 className="text-sm font-medium text-accent">Stage logs</h3>
       <div className="glass-card max-h-48 space-y-2 overflow-y-auto p-4 font-mono text-[11px] scrollbar-thin">
         {stageLogs.length > 0 ? (
@@ -519,9 +564,9 @@ const buildHighlights = (
 };
 
 const SEVERITY_STYLES: Record<string, string> = {
-  high: "bg-red-500/15 text-red-400 border border-red-500/30",
-  medium: "bg-yellow-500/15 text-yellow-400 border border-yellow-500/30",
-  low: "bg-blue-500/15 text-blue-400 border border-blue-500/30",
+  high: "border-red-500/30 bg-red-500/10 text-red-300",
+  medium: "border-amber-400/30 bg-amber-400/10 text-amber-200",
+  low: "border-sky-400/30 bg-sky-400/10 text-sky-200",
 };
 
 const buildAnalysisQualityPanel = (stageResult: Record<string, unknown> | null) => {
@@ -562,27 +607,32 @@ const buildAnalysisQualityPanel = (stageResult: Record<string, unknown> | null) 
   return (
     <div className="space-y-4">
       <div className="space-y-2">
-        <h3 className="text-sm font-medium text-accent">Data quality metrics</h3>
-        <div className="grid grid-cols-3 gap-2">
+        <h3 className="text-xs font-semibold uppercase tracking-[0.22em] text-muted-foreground">Data Quality Metrics</h3>
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
           {kpis.map((kpi) => (
-            <div key={kpi.label} className="glass-card space-y-1 p-3">
-              <p className="text-[10px] text-muted-foreground">{kpi.label}</p>
-              <p className="font-mono text-sm text-foreground">{kpi.value}</p>
+            <div key={kpi.label} className="rounded-2xl border border-border/60 bg-background/35 p-4">
+              <p className="text-[11px] uppercase tracking-[0.2em] text-muted-foreground">{kpi.label}</p>
+              <p className="mt-2 font-mono text-2xl font-semibold text-foreground">{kpi.value}</p>
             </div>
           ))}
         </div>
       </div>
 
       {qualityFlags.length > 0 && (
-        <div className="space-y-2">
-          <h3 className="text-sm font-medium text-accent">Quality flags</h3>
-          <div className="space-y-2">
+        <div className="glass-card border-border/60 p-5">
+          <h3 className="text-xs font-semibold uppercase tracking-[0.22em] text-muted-foreground">Quality Flags</h3>
+          <p className="mt-1 text-sm text-secondary-foreground">
+            Important issues the analysis stage noticed while profiling the dataset.
+          </p>
+          <div className="mt-5 space-y-3">
             {qualityFlags.map((flag, index) => (
               <div
                 key={`${flag.field}-${index}`}
-                className={`flex items-start gap-3 rounded-lg px-3 py-2 text-xs ${SEVERITY_STYLES[flag.severity] ?? "bg-secondary/50 text-foreground"}`}
+                className={`flex items-start gap-3 rounded-2xl border px-4 py-3 text-sm ${
+                  SEVERITY_STYLES[flag.severity] ?? "border-border/60 bg-background/35 text-foreground"
+                }`}
               >
-                <span className="mt-px shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide opacity-80">
+                <span className="mt-0.5 shrink-0 rounded-full border border-current/20 px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.18em]">
                   {flag.severity}
                 </span>
                 <span className="leading-relaxed">{flag.message}</span>
@@ -593,18 +643,23 @@ const buildAnalysisQualityPanel = (stageResult: Record<string, unknown> | null) 
       )}
 
       {analysisScore && (
-        <div className="space-y-2">
-          <h3 className="text-sm font-medium text-accent">Analysis summary</h3>
-          <div className="glass-card p-4 text-sm text-secondary-foreground">{analysisScore}</div>
+        <div className="glass-card border-border/60 p-5">
+          <h3 className="text-xs font-semibold uppercase tracking-[0.22em] text-muted-foreground">Analysis Summary</h3>
+          <div className="mt-5 rounded-2xl border border-primary/20 bg-primary/10 p-4 text-sm leading-7 text-secondary-foreground">
+            {analysisScore}
+          </div>
         </div>
       )}
 
       {recommendations.length > 0 && (
-        <div className="space-y-2">
-          <h3 className="text-sm font-medium text-accent">Recommendations</h3>
-          <div className="glass-card space-y-2 p-4">
+        <div className="glass-card border-border/60 p-5">
+          <h3 className="text-xs font-semibold uppercase tracking-[0.22em] text-muted-foreground">Recommendations</h3>
+          <p className="mt-1 text-sm text-secondary-foreground">
+            Suggested next steps based on the current analysis signals.
+          </p>
+          <div className="mt-5 space-y-3">
             {recommendations.map((rec, index) => (
-              <div key={`rec-${index}`} className="flex items-start gap-2 text-sm text-secondary-foreground">
+              <div key={`rec-${index}`} className="flex items-start gap-3 rounded-2xl border border-border/60 bg-background/35 px-4 py-3 text-sm text-secondary-foreground">
                 <span className="mt-0.5 shrink-0 text-accent">•</span>
                 <span>{rec}</span>
               </div>
@@ -774,135 +829,143 @@ const buildModelSelectionPanel = (stageResult: Record<string, unknown> | null) =
 
   return (
     <div className="space-y-4">
-      <div className="glass-card space-y-2 p-4">
-        <h3 className="text-sm font-medium text-accent">Candidate set</h3>
-        <div className="flex items-center gap-2">
-          <span className="rounded-md bg-accent/10 px-2 py-1 font-mono text-[12px] text-accent">
+      <div className="glass-card border-border/60 p-5">
+        <h3 className="text-xs font-semibold uppercase tracking-[0.22em] text-muted-foreground">Candidate Set</h3>
+        <div className="mt-5 flex items-center gap-2">
+          <span className="rounded-full border border-accent/30 bg-accent/10 px-3 py-1 text-xs text-accent">
             {topCandidates.map((candidate) => String(candidate.model_name ?? "")).filter(Boolean).join(", ") || "Pending"}
           </span>
         </div>
       </div>
 
       {summaryText && (
-        <div className="space-y-2">
-          <h3 className="text-sm font-medium text-accent">Model selection summary</h3>
-          <div className="glass-card whitespace-pre-wrap p-4 text-sm text-secondary-foreground">{summaryText}</div>
+        <div className="glass-card border-border/60 p-5">
+          <h3 className="text-xs font-semibold uppercase tracking-[0.22em] text-muted-foreground">Model Selection Summary</h3>
+          <div className="mt-5 rounded-2xl border border-primary/20 bg-primary/10 p-4 text-sm leading-7 text-secondary-foreground">{summaryText}</div>
         </div>
       )}
 
-      <div className="glass-card space-y-2 p-4">
-        <h3 className="text-sm font-medium text-accent">Candidate models</h3>
-        <div className="space-y-2">
+      <div className="glass-card border-border/60 p-5">
+        <h3 className="text-xs font-semibold uppercase tracking-[0.22em] text-muted-foreground">Candidate Models</h3>
+        <div className="mt-5 space-y-3">
           {candidates.length > 0 ? (
             topCandidates.map((candidate, index) => {
               const candidateName = String(candidate.model_name ?? "");
               const candidateFamily = String(candidate.model_family ?? "other").split("_").join(" ");
               const candidateReasoning = String(candidate.reasoning ?? "") || buildNotChosenReason(candidateName, selectedModel, nSamples);
               return (
-              <div key={candidateName} className="flex items-center justify-between rounded-lg bg-secondary/50 px-3 py-2 text-xs">
-                <div className="flex items-center gap-2">
-                  <span className="text-[10px] text-muted-foreground">
+              <div key={candidateName} className="rounded-2xl border border-border/60 bg-background/35 p-4 text-xs">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span className="rounded-full border border-border/60 px-2.5 py-1 text-[11px] text-muted-foreground">
                     #{index + 1}
-                  </span>
-                  <span className="font-mono text-[11px] text-foreground">{candidateName}</span>
-                  <span className="text-[10px] text-muted-foreground">({candidateFamily})</span>
+                    </span>
+                    <span className="font-mono text-[11px] text-foreground">{candidateName}</span>
+                    <span className="rounded-full border border-border/60 px-2.5 py-1 text-[10px] text-muted-foreground">{candidateFamily}</span>
+                  </div>
                 </div>
-                <span className="text-[10px] text-muted-foreground">
+                <span className="mt-3 block max-w-[28rem] text-[11px] leading-6 text-muted-foreground">
                   {candidateReasoning}
                 </span>
               </div>
             );})
           ) : (
-            <p className="text-xs text-muted-foreground">Candidate models will appear after selection runs.</p>
+            <div className="rounded-2xl border border-dashed border-border/60 p-6 text-sm text-muted-foreground">
+              Candidate models will appear after selection runs.
+            </div>
           )}
         </div>
       </div>
 
-      <div className="glass-card space-y-2 p-4">
-        <h3 className="text-sm font-medium text-accent">Model configuration</h3>
-        <div className="space-y-2">
+      <div className="glass-card border-border/60 p-5">
+        <h3 className="text-xs font-semibold uppercase tracking-[0.22em] text-muted-foreground">Model Configuration</h3>
+        <div className="mt-5 space-y-3">
           {params.length > 0 ? (
             params.map(([key, value]) => (
-              <div key={key} className="flex items-start justify-between gap-3">
+              <div key={key} className="flex items-start justify-between gap-3 rounded-2xl border border-border/60 bg-background/35 p-4">
                 <div>
                   <p className="font-mono text-[11px] text-foreground">{key}</p>
-                  {PARAM_HINTS[key] && <p className="text-[10px] text-muted-foreground">{PARAM_HINTS[key]}</p>}
+                  {PARAM_HINTS[key] && <p className="mt-1 text-[11px] leading-6 text-muted-foreground">{PARAM_HINTS[key]}</p>}
                 </div>
-                <span className="rounded-md bg-secondary px-2 py-1 font-mono text-[10px] text-foreground/80">
+                <span className="rounded-full border border-border/60 bg-background/40 px-3 py-1.5 font-mono text-[10px] text-foreground/80">
                   {String(value)}
                 </span>
               </div>
             ))
           ) : (
-            <p className="text-xs text-muted-foreground">Hyperparameters will appear after selection runs.</p>
+            <div className="rounded-2xl border border-dashed border-border/60 p-6 text-sm text-muted-foreground">
+              Hyperparameters will appear after selection runs.
+            </div>
           )}
         </div>
       </div>
 
-      <div className="glass-card space-y-2 p-4">
-        <h3 className="text-sm font-medium text-accent">Signals used</h3>
-        <div className="grid grid-cols-2 gap-2 text-[11px]">
-          <div className="rounded-md bg-secondary/50 p-2">
-            <p className="text-muted-foreground">Dataset size</p>
-            <p className="font-mono text-foreground">{datasetSizeLabel}</p>
+      <div className="glass-card border-border/60 p-5">
+        <h3 className="text-xs font-semibold uppercase tracking-[0.22em] text-muted-foreground">Signals Used</h3>
+        <div className="mt-5 grid grid-cols-2 gap-3 text-[11px]">
+          <div className="rounded-2xl border border-border/60 bg-background/35 p-4">
+            <p className="text-[11px] uppercase tracking-[0.2em] text-muted-foreground">Dataset size</p>
+            <p className="mt-2 font-mono text-sm text-foreground">{datasetSizeLabel}</p>
           </div>
-          <div className="rounded-md bg-secondary/50 p-2">
-            <p className="text-muted-foreground">Feature count</p>
-            <p className="font-mono text-foreground">{featureCountLabel}</p>
+          <div className="rounded-2xl border border-border/60 bg-background/35 p-4">
+            <p className="text-[11px] uppercase tracking-[0.2em] text-muted-foreground">Feature count</p>
+            <p className="mt-2 font-mono text-sm text-foreground">{featureCountLabel}</p>
           </div>
-          <div className="rounded-md bg-secondary/50 p-2">
-            <p className="text-muted-foreground">Task type</p>
-            <p className="font-mono text-foreground">{taskType || "Pending"}</p>
+          <div className="rounded-2xl border border-border/60 bg-background/35 p-4">
+            <p className="text-[11px] uppercase tracking-[0.2em] text-muted-foreground">Task type</p>
+            <p className="mt-2 font-mono text-sm text-foreground">{taskType || "Pending"}</p>
           </div>
-          <div className="rounded-md bg-secondary/50 p-2">
-            <p className="text-muted-foreground">Class balance</p>
-            <p className="font-mono text-foreground">
+          <div className="rounded-2xl border border-border/60 bg-background/35 p-4">
+            <p className="text-[11px] uppercase tracking-[0.2em] text-muted-foreground">Class balance</p>
+            <p className="mt-2 font-mono text-sm text-foreground">
               {typeof classBalance === "number" ? `${(classBalance * 100).toFixed(1)}%` : "N/A"}
             </p>
           </div>
-          <div className="rounded-md bg-secondary/50 p-2">
-            <p className="text-muted-foreground">High correlations</p>
-            <p className="font-mono text-foreground">{String(signals.high_correlation_count ?? "Pending")}</p>
+          <div className="rounded-2xl border border-border/60 bg-background/35 p-4">
+            <p className="text-[11px] uppercase tracking-[0.2em] text-muted-foreground">High correlations</p>
+            <p className="mt-2 font-mono text-sm text-foreground">{String(signals.high_correlation_count ?? "Pending")}</p>
           </div>
-          <div className="rounded-md bg-secondary/50 p-2">
-            <p className="text-muted-foreground">Outlier risk</p>
-            <p className="font-mono text-foreground">
+          <div className="rounded-2xl border border-border/60 bg-background/35 p-4">
+            <p className="text-[11px] uppercase tracking-[0.2em] text-muted-foreground">Outlier risk</p>
+            <p className="mt-2 font-mono text-sm text-foreground">
               {signals.has_outliers ? "Detected" : signals.has_outliers === false ? "Low" : "Pending"}
             </p>
           </div>
         </div>
       </div>
 
-      <div className="glass-card space-y-2 p-4">
-        <h3 className="text-sm font-medium text-accent">Expected model behavior</h3>
-        <div className="space-y-1 text-[11px] text-secondary-foreground">
+      <div className="glass-card border-border/60 p-5">
+        <h3 className="text-xs font-semibold uppercase tracking-[0.22em] text-muted-foreground">Expected Model Behavior</h3>
+        <div className="mt-5 space-y-3 text-[11px] text-secondary-foreground">
           {capabilities.length > 0 ? (
             capabilities.map((item) => (
-              <div key={item} className="flex items-center gap-2">
+              <div key={item} className="flex items-center gap-3 rounded-2xl border border-border/60 bg-background/35 px-4 py-3">
                 <span className="text-accent">✓</span>
                 <span>{item}</span>
               </div>
             ))
           ) : (
-            <p className="text-muted-foreground">No capability profile available for this model yet.</p>
+            <div className="rounded-2xl border border-dashed border-border/60 p-6 text-sm text-muted-foreground">
+              No capability profile available for this model yet.
+            </div>
           )}
         </div>
       </div>
 
-      <div className="glass-card space-y-2 p-4">
-        <h3 className="text-sm font-medium text-accent">Training estimate</h3>
-        <div className="flex flex-wrap gap-3 text-[11px] text-secondary-foreground">
-          <div>
-            <p className="text-muted-foreground">Complexity</p>
-            <p className="font-mono text-foreground">{complexity.complexity}</p>
+      <div className="glass-card border-border/60 p-5">
+        <h3 className="text-xs font-semibold uppercase tracking-[0.22em] text-muted-foreground">Training Estimate</h3>
+        <div className="mt-5 grid gap-3 sm:grid-cols-3 text-[11px] text-secondary-foreground">
+          <div className="rounded-2xl border border-border/60 bg-background/35 p-4">
+            <p className="text-[11px] uppercase tracking-[0.2em] text-muted-foreground">Complexity</p>
+            <p className="mt-2 font-mono text-sm text-foreground">{complexity.complexity}</p>
           </div>
-          <div>
-            <p className="text-muted-foreground">Expected time</p>
-            <p className="font-mono text-foreground">{complexity.time}</p>
+          <div className="rounded-2xl border border-border/60 bg-background/35 p-4">
+            <p className="text-[11px] uppercase tracking-[0.2em] text-muted-foreground">Expected time</p>
+            <p className="mt-2 font-mono text-sm text-foreground">{complexity.time}</p>
           </div>
-          <div>
-            <p className="text-muted-foreground">Memory</p>
-            <p className="font-mono text-foreground">{complexity.memory}</p>
+          <div className="rounded-2xl border border-border/60 bg-background/35 p-4">
+            <p className="text-[11px] uppercase tracking-[0.2em] text-muted-foreground">Memory</p>
+            <p className="mt-2 font-mono text-sm text-foreground">{complexity.memory}</p>
           </div>
         </div>
       </div>
@@ -934,22 +997,22 @@ const buildTrainingComparisonPanel = (stageResult: Record<string, unknown> | nul
 
   return (
     <div className="space-y-4">
-      <h3 className="text-sm font-medium text-accent">Model training experiments</h3>
+      <h3 className="text-xs font-semibold uppercase tracking-[0.22em] text-muted-foreground">Model Training Experiments</h3>
 
-      <div className="grid gap-2 md:grid-cols-2">
-        <div className="glass-card space-y-1 p-3">
-          <p className="text-[10px] text-muted-foreground">Compared models</p>
-          <p className="font-mono text-sm text-foreground">{hasComparisons ? comparisons.length : "Pending"}</p>
+      <div className="grid gap-3 md:grid-cols-2">
+        <div className="rounded-2xl border border-border/60 bg-background/35 p-4">
+          <p className="text-[11px] uppercase tracking-[0.2em] text-muted-foreground">Compared models</p>
+          <p className="mt-2 font-mono text-2xl font-semibold text-foreground">{hasComparisons ? comparisons.length : "Pending"}</p>
         </div>
-        <div className="glass-card space-y-1 p-3">
-          <p className="text-[10px] text-muted-foreground">Best CV score</p>
-          <p className="font-mono text-sm text-foreground">{bestCv !== null ? bestCv.toFixed(4) : "Pending"}</p>
+        <div className="rounded-2xl border border-border/60 bg-background/35 p-4">
+          <p className="text-[11px] uppercase tracking-[0.2em] text-muted-foreground">Best CV score</p>
+          <p className="mt-2 font-mono text-2xl font-semibold text-foreground">{bestCv !== null ? bestCv.toFixed(4) : "Pending"}</p>
         </div>
       </div>
 
-      <div className="glass-card space-y-3 p-4 text-[11px] text-secondary-foreground">
+      <div className="glass-card border-border/60 p-5 text-[11px] text-secondary-foreground">
         {hasComparisons ? (
-          <div className="space-y-3">
+          <div className="space-y-4">
             {comparisons.map((item, index) => {
               const modelName = String(item.model_name || "Model");
               const family = formatFamilyLabel(item.model_family);
@@ -971,27 +1034,27 @@ const buildTrainingComparisonPanel = (stageResult: Record<string, unknown> | nul
               return (
                 <div
                   key={`${modelName}-${index}`}
-                  className={`rounded-lg border p-3 ${
-                    isWinner ? "border-accent/60 bg-accent/10" : "border-border/60 bg-secondary/40"
+                  className={`rounded-2xl border p-4 ${
+                    isWinner ? "border-accent/60 bg-accent/10" : "border-border/60 bg-background/35"
                   }`}
                 >
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div className="flex min-w-0 items-center gap-2">
-                      <span className="rounded-md bg-secondary px-2 py-1 text-[10px] text-muted-foreground">#{index + 1}</span>
+                      <span className="rounded-full border border-border/60 px-2.5 py-1 text-[11px] text-muted-foreground">#{index + 1}</span>
                       <span className="truncate font-mono text-[11px] text-foreground">{modelName}</span>
-                      <span className="rounded-md bg-secondary px-2 py-1 text-[10px] text-muted-foreground">{family}</span>
-                      {isWinner && <span className="rounded-md bg-accent/20 px-2 py-1 text-[10px] text-accent">selected</span>}
+                      <span className="rounded-full border border-border/60 px-2.5 py-1 text-[10px] text-muted-foreground">{family}</span>
+                      {isWinner && <span className="rounded-full border border-accent/30 bg-accent/20 px-2.5 py-1 text-[10px] text-accent">selected</span>}
                     </div>
                     <div className="text-right">
                       <p className="font-mono text-[11px] text-foreground">
                         {cvMean !== null ? cvMean.toFixed(4) : "n/a"}
                         <span className="text-muted-foreground"> ± {cvStd !== null ? cvStd.toFixed(4) : "n/a"}</span>
                       </p>
-                      <p className="text-[10px] text-muted-foreground">CV mean ± std</p>
+                      <p className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground">CV mean ± std</p>
                     </div>
                   </div>
 
-                  <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-secondary">
+                  <div className="mt-4 h-2 overflow-hidden rounded-full bg-secondary">
                     <div
                       className="h-full rounded-full"
                       style={{
@@ -1001,13 +1064,13 @@ const buildTrainingComparisonPanel = (stageResult: Record<string, unknown> | nul
                     />
                   </div>
 
-                  <div className="mt-2 grid gap-2 md:grid-cols-2">
-                    <div className="space-y-1">
-                      <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Fold scores</p>
+                  <div className="mt-4 grid gap-3 md:grid-cols-2">
+                    <div className="space-y-2">
+                      <p className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground">Fold scores</p>
                       {foldScores.length > 0 ? (
-                        <div className="flex flex-wrap gap-1">
+                        <div className="flex flex-wrap gap-2">
                           {foldScores.map((score, scoreIndex) => (
-                            <span key={`${modelName}-fold-${scoreIndex}`} className="rounded bg-secondary px-2 py-1 font-mono text-[10px] text-foreground/90">
+                            <span key={`${modelName}-fold-${scoreIndex}`} className="rounded-full border border-border/60 bg-background/40 px-3 py-1.5 font-mono text-[10px] text-foreground/90">
                               F{scoreIndex + 1}: {score.toFixed(3)}
                             </span>
                           ))}
@@ -1017,12 +1080,12 @@ const buildTrainingComparisonPanel = (stageResult: Record<string, unknown> | nul
                       )}
                     </div>
 
-                    <div className="space-y-1">
-                      <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Hyperparameters</p>
+                    <div className="space-y-2">
+                      <p className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground">Hyperparameters</p>
                       {paramEntries.length > 0 ? (
-                        <div className="flex flex-wrap gap-1">
+                        <div className="flex flex-wrap gap-2">
                           {paramEntries.map(([key, value]) => (
-                            <span key={`${modelName}-${key}`} className="rounded bg-secondary px-2 py-1 font-mono text-[10px] text-foreground/90">
+                            <span key={`${modelName}-${key}`} className="rounded-full border border-border/60 bg-background/40 px-3 py-1.5 font-mono text-[10px] text-foreground/90">
                               {key}={formatParamValue(value)}
                             </span>
                           ))}
@@ -1037,9 +1100,9 @@ const buildTrainingComparisonPanel = (stageResult: Record<string, unknown> | nul
             })}
           </div>
         ) : (
-          <p className="text-xs text-muted-foreground">
+          <div className="rounded-2xl border border-dashed border-border/60 p-6 text-sm text-muted-foreground">
             Multi-model comparison is enabled, but experiment results are not available yet.
-          </p>
+          </div>
         )}
       </div>
     </div>
@@ -1133,37 +1196,44 @@ const PreprocessExplanation = ({
 
   return (
     <div className="space-y-2">
-      <p className="text-foreground">{summary}</p>
-      <ul className="ml-4 list-disc space-y-1 text-sm text-secondary-foreground">
+      <div className="rounded-2xl border border-primary/20 bg-primary/10 p-4">
+        <p className="text-sm leading-7 text-secondary-foreground">{summary}</p>
+      </div>
+      <div className="space-y-3">
         {bullets.map((bullet) => (
-          <li key={bullet}>{bullet}</li>
+          <div
+            key={bullet}
+            className="rounded-2xl border border-border/60 bg-background/35 px-4 py-3 text-sm leading-7 text-secondary-foreground"
+          >
+            {bullet}
+          </div>
         ))}
-      </ul>
+      </div>
       {(imputedNumeric.length > 0 || imputedCategorical.length > 0 || rareGrouped.length > 0) && (
-        <p className="text-sm text-secondary-foreground">
+        <div className="rounded-2xl border border-border/60 bg-background/35 p-4 text-sm leading-7 text-secondary-foreground">
           {imputedNumeric.length > 0 && `Numeric imputation: ${imputedNumeric.slice(0, 4).join(", ")}.`}{" "}
           {imputedCategorical.length > 0 && `Categorical imputation: ${imputedCategorical.slice(0, 4).join(", ")}.`}{" "}
           {rareGrouped.length > 0 && `Rare levels grouped in ${rareGrouped.slice(0, 4).join(", ")}.`}
-        </p>
+        </div>
       )}
       {(train || test) && (
-        <p className="text-sm text-secondary-foreground">
+        <div className="rounded-2xl border border-border/60 bg-background/35 p-4 text-sm leading-7 text-secondary-foreground">
           Finally, the data was split into {train ? train.toLocaleString() : "?"} rows for training and{" "}
           {test ? test.toLocaleString() : "?"} rows to test how well the model performs on new data.
-        </p>
+        </div>
       )}
       {splitMatchesModelingRows && (
-        <p className="text-sm font-medium text-primary">
+        <div className="rounded-2xl border border-accent/30 bg-accent/10 p-4 text-sm font-medium text-accent">
           {droppedRows > 0
             ? `${droppedRows.toLocaleString()} row${droppedRows === 1 ? "" : "s"} were removed before the final split.`
             : "No feature rows had to be removed for missingness before the final split."}
-        </p>
+        </div>
       )}
       <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
         {["Raw data", "Drop weak columns", "Handle missingness", "Encode categories", "Scale and split"].map(
           (step, index, arr) => (
             <div key={step} className="flex items-center gap-1">
-              <span className="rounded bg-secondary px-2 py-1">{step}</span>
+              <span className="rounded-full border border-border/60 bg-background/35 px-3 py-1.5">{step}</span>
               {index < arr.length - 1 && <span className="text-muted-foreground">→</span>}
             </div>
           ),

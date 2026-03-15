@@ -79,8 +79,8 @@ const FeatureEngineeringDashboard = ({
 
         <FeatureNotes viewModel={viewModel} />
 
-        <section className="grid gap-4 lg:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)]" data-chat-context-label="Feature engineering insights">
-          <div className="space-y-4">
+        <section className="w-full" data-chat-context-label="Feature engineering insights">
+          <div className="w-full space-y-4">
             <SelectedFeaturesPanel features={readSelectedFeatures(stageResult)} />
             <TopFeaturesSection features={viewModel.topFeatures} />
             <DroppedFeaturesSection viewModel={viewModel} />
