@@ -164,7 +164,7 @@ class ModelSelectionAgent(BaseAgent):
             )
             selection_reasoning = str(llm_selection.get("selection_reasoning") or selection_reasoning)
 
-            llm_summary = self._generate_llm_summary(
+            llm_summary = self._build_selection_summary(
                 n_samples=n_samples,
                 n_features=n_features,
                 task_type=task_type,
@@ -559,7 +559,7 @@ class ModelSelectionAgent(BaseAgent):
             "selection_reasoning": reasoning,
         }
 
-    def _generate_llm_summary(
+    def _build_selection_summary(
         self,
         *,
         n_samples: int,
@@ -574,49 +574,40 @@ class ModelSelectionAgent(BaseAgent):
         selected_features: list[str],
         analysis: Optional[dict[str, Any]] = None,
     ) -> str:
-        """Generate a short, dataset-specific summary for the selected model."""
-        payload = {
-            "task_type": task_type,
-            "target_column": target_column,
-            "n_samples": n_samples,
-            "n_features": n_features,
-            "class_balance": class_balance,
-            "candidate_models": candidate_models,
-            "selected_model": selected_model,
-            "top_candidates": top_candidates,
-            "reasoning": reasoning,
-            "selected_features_preview": selected_features[:12],
-        }
+        """Build a short deterministic summary without a second LLM call."""
+        candidate_label = ", ".join(candidate_models[:3]) if candidate_models else selected_model
+        feature_count = len(selected_features)
+        analysis_notes: list[str] = []
 
         if analysis:
-            payload["data_analysis"] = {
-                "high_correlation_count": analysis.get("high_correlation_count", 0),
-                "has_high_correlations": analysis.get("has_high_correlations", False),
-                "high_missing_cols": analysis.get("high_missing_cols", 0),
-                "has_outliers": analysis.get("has_outliers", False),
-                "is_high_dimensional": analysis.get("dimensionality_ratio", 0) > 0.5 if analysis.get("dimensionality_ratio") else False,
-                "risk_level": analysis.get("risk_level", "low"),
-                "numeric_count": analysis.get("numeric_count", 0),
-                "categorical_count": analysis.get("categorical_count", 0),
-            }
+            if analysis.get("has_high_correlations"):
+                analysis_notes.append("high feature correlation")
+            if analysis.get("has_outliers"):
+                analysis_notes.append("outlier sensitivity")
+            if analysis.get("high_missing_cols", 0) > 0:
+                analysis_notes.append("missing-value risk")
+            if analysis.get("dimensionality_ratio", 0) > 0.5:
+                analysis_notes.append("high dimensionality")
 
-        summary = self._generate_llm_text(
-            system_prompt=(
-                "You are an AutoML assistant. Write a concise 2-4 sentence summary explaining why the candidate set "
-                "collectively fits this dataset and target. Discuss candidates comparably and avoid declaring a single winner."
-            ),
-            user_prompt=f"Model selection context:\n{self._safe_json(payload)}",
-            temperature=0.2,
-            max_tokens=220,
-        )
+        summary_parts = [
+            f"Prepared a candidate set for the {task_type} target `{target_column}` using {n_samples} rows and {n_features} features.",
+            f"Current candidates: {candidate_label}.",
+        ]
 
-        if summary:
-            return summary
+        if feature_count > 0:
+            summary_parts.append(f"The selection considered {feature_count} engineered/selected features from upstream stages.")
 
-        return (
-            f"Prepared an equally weighted candidate set for a {task_type} task with {n_samples} samples and {n_features} features. "
-            f"{reasoning}"
-        )
+        if class_balance < 0.999 and task_type == "classification":
+            summary_parts.append(f"Class balance was reviewed at roughly {(class_balance * 100):.1f}% minority-to-majority ratio.")
+
+        if analysis_notes:
+            summary_parts.append(f"Data signals considered: {', '.join(analysis_notes)}.")
+
+        cleaned_reasoning = reasoning.strip()
+        if cleaned_reasoning:
+            summary_parts.append(cleaned_reasoning)
+
+        return " ".join(part for part in summary_parts if part).strip()
 
     def _merge_candidate_selection(
         self,

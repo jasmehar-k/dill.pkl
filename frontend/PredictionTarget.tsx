@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { motion } from "framer-motion";
-import { ChevronDown, Loader2, Search, Sparkles } from "lucide-react";
+import { ChevronDown, Loader2, Search } from "lucide-react";
 import type { DatasetColumn } from "@/lib/api";
 
 interface PredictionTargetProps {
@@ -9,7 +9,6 @@ interface PredictionTargetProps {
   selectedColumn: string | null;
   isSaving: boolean;
   onSelect: (column: string) => Promise<void> | void;
-  onAutoDetect: () => void;
 }
 
 const PredictionTarget = ({
@@ -18,11 +17,9 @@ const PredictionTarget = ({
   selectedColumn,
   isSaving,
   onSelect,
-  onAutoDetect,
 }: PredictionTargetProps) => {
   const [searchQuery, setSearchQuery] = useState("");
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
-  const [manualInput, setManualInput] = useState("");
 
   if (!datasetLoaded) return null;
 
@@ -36,7 +33,6 @@ const PredictionTarget = ({
     await onSelect(column);
     setIsDropdownOpen(false);
     setSearchQuery("");
-    setManualInput("");
   };
 
   return (
@@ -46,25 +42,16 @@ const PredictionTarget = ({
       animate={{ opacity: 1, y: 0 }}
       transition={{ delay: 0.2 }}
     >
-      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+      <div>
         <div>
           <h3 className="text-sm font-semibold text-foreground">What are you trying to predict?</h3>
           <p className="mt-0.5 text-[11px] text-muted-foreground">
             Pick a target column from the uploaded dataset so the agentic pipeline can analyze and train against it.
           </p>
         </div>
-        <button
-          onClick={onAutoDetect}
-          disabled={columns.length === 0 || isSaving}
-          className="flex items-center gap-1.5 self-start rounded-lg bg-primary/10 px-3 py-1.5 text-[11px] font-medium text-primary transition-colors hover:bg-primary/20 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          <Sparkles className="h-3 w-3" />
-          Auto-detect target
-        </button>
       </div>
 
-      <div className="flex flex-col gap-2 md:flex-row">
-        <div className="relative flex-1">
+      <div className="relative">
           <button
             onClick={() => setIsDropdownOpen((current) => !current)}
             disabled={columns.length === 0 || isSaving}
@@ -116,19 +103,6 @@ const PredictionTarget = ({
               </div>
             </motion.div>
           )}
-        </div>
-
-        <input
-          value={manualInput}
-          onChange={(e) => setManualInput(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && manualInput.trim()) {
-              void handleSelect(manualInput.trim());
-            }
-          }}
-          placeholder="Or type column name..."
-          className="flex-1 rounded-lg bg-secondary px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary/50"
-        />
       </div>
 
       <div className="flex flex-wrap items-center gap-2 text-[11px] font-mono">

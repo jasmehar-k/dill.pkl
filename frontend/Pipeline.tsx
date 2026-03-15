@@ -3,6 +3,7 @@ import { motion } from "framer-motion";
 import { stages, type PipelineStage, type StageStatus } from "@/data/pipelineStages";
 import {
   getDatasetColumns,
+  getDatasetPreview,
   getDatasetSummary,
   getExplanation,
   getMetrics,
@@ -13,6 +14,7 @@ import {
   setTargetColumn,
   uploadDataset,
   type DatasetColumn,
+  type DatasetPreviewResponse,
   type DatasetSummary,
   type MetricsResponse,
   type PipelineConfig,
@@ -20,12 +22,10 @@ import {
   type TaskType,
 } from "@/lib/api";
 import ChatBot from "./ChatBot";
-import DatasetSummaryCard from "./DatasetSummary";
 import DatasetUpload from "./DatasetUpload";
 import NeuralBackground from "./NeuralBackground";
 import PipelineConnector from "./PipelineConnector";
 import PipelineHeader from "./PipelineHeader";
-import PipelineLogs from "./PipelineLogs";
 import PipelineNode from "./PipelineNode";
 import PredictionTarget from "./PredictionTarget";
 import ResultsPanel from "./ResultsPanel";
@@ -58,6 +58,8 @@ const Pipeline = () => {
   const [selectedStage, setSelectedStage] = useState<PipelineStage | null>(null);
   const [datasetSummary, setDatasetSummary] = useState<DatasetSummary | null>(null);
   const [datasetColumns, setDatasetColumns] = useState<DatasetColumn[]>([]);
+  const [datasetPreview, setDatasetPreview] = useState<DatasetPreviewResponse | null>(null);
+  const [isLoadingDatasetPreview, setIsLoadingDatasetPreview] = useState(false);
   const [pipelineStatus, setPipelineStatus] = useState<Record<string, StageStatus>>(createInitialStatuses);
   const [stageLogs, setStageLogs] = useState<Record<string, string[]>>(createEmptyLogs);
   const [stageResults, setStageResults] = useState<Record<string, Record<string, unknown>>>({});
@@ -116,6 +118,8 @@ const Pipeline = () => {
     if (!statusResponse.dataset_loaded) {
       setDatasetSummary(null);
       setDatasetColumns([]);
+      setDatasetPreview(null);
+      setIsLoadingDatasetPreview(false);
       setStageLogs(createEmptyLogs());
       setStageResults({});
       setMetrics(null);
@@ -123,12 +127,24 @@ const Pipeline = () => {
       return;
     }
 
-    const [summary, columnResponse] = await Promise.all([getDatasetSummary(), getDatasetColumns()]);
-    setDatasetSummary(summary);
-    setDatasetColumns(columnResponse.columns);
+    let latestColumns: DatasetColumn[] = [];
+    setIsLoadingDatasetPreview(true);
+    try {
+      const [summary, columnResponse, previewResponse] = await Promise.all([
+        getDatasetSummary(),
+        getDatasetColumns(),
+        getDatasetPreview(5).catch(() => null),
+      ]);
+      latestColumns = columnResponse.columns;
+      setDatasetSummary(summary);
+      setDatasetColumns(latestColumns);
+      setDatasetPreview(previewResponse);
+    } finally {
+      setIsLoadingDatasetPreview(false);
+    }
 
     if (statusResponse.target_column) {
-      setTaskType(inferTaskType(columnResponse.columns, statusResponse.target_column));
+      setTaskType(inferTaskType(latestColumns, statusResponse.target_column));
     }
 
     await refreshLogs();
@@ -249,6 +265,7 @@ const Pipeline = () => {
       await uploadDataset(file);
       setMetrics(null);
       setExplanation(null);
+      setDatasetPreview(null);
       setStageResults({});
       setStageLogs(createEmptyLogs());
       await refreshPipelineData();
@@ -274,13 +291,6 @@ const Pipeline = () => {
       setIsSavingTarget(false);
     }
   }, [datasetColumns, refreshPipelineData]);
-
-  const handleAutoDetectTarget = useCallback(() => {
-    const suggestion = suggestTargetColumn(datasetColumns);
-    if (suggestion) {
-      void handleTargetSelect(suggestion);
-    }
-  }, [datasetColumns, handleTargetSelect]);
 
   const handleRunPipeline = useCallback(async () => {
     if (!datasetSummary || !selectedColumn) {
@@ -378,7 +388,6 @@ const Pipeline = () => {
     pipelineStatus.evaluation === "completed" && !evaluationResponsesReady
       ? "evaluation"
       : EXECUTION_STAGE_ORDER.find((stageId) => pipelineStatus[stageId] === "running") || null;
-  const completedStageIds = VISIBLE_STAGE_ORDER.filter((stageId) => getVisibleStageStatus(stageId) === "completed");
   const isComplete = completedCount === VISIBLE_STAGES.length;
   const modelName =
     (metrics?.model_name as string | null | undefined) ||
@@ -398,11 +407,9 @@ const Pipeline = () => {
           targetColumn={selectedColumn}
           modelName={modelName}
           metrics={metrics}
-          taskType={taskType}
           canRun={canRun}
           isRunning={isRunningPipeline}
           onRun={handleRunPipeline}
-          onTaskTypeChange={setTaskType}
         />
 
         {error && (
@@ -428,13 +435,6 @@ const Pipeline = () => {
           selectedColumn={selectedColumn}
           isSaving={isSavingTarget}
           onSelect={handleTargetSelect}
-          onAutoDetect={handleAutoDetectTarget}
-        />
-
-        <DatasetSummaryCard
-          summary={datasetSummary}
-          columns={datasetColumns}
-          targetColumn={selectedColumn}
         />
 
         <div className="flex items-start justify-center overflow-x-auto pb-4 pt-2">
@@ -467,14 +467,6 @@ const Pipeline = () => {
           </motion.p>
         )}
 
-        <PipelineLogs
-          activeStageId={activeStageId}
-          completedStageIds={completedStageIds}
-          stageLogs={stageLogs}
-          stageResults={stageResults}
-          metrics={metrics}
-        />
-
         <ResultsPanel
           isComplete={isComplete}
           metrics={metrics}
@@ -487,9 +479,11 @@ const Pipeline = () => {
           stageResult={selectedStage ? stageResults[selectedStage.id] || null : null}
           lossStageResult={stageResults.loss || null}
           datasetSummary={datasetSummary}
+          datasetColumns={datasetColumns}
+          datasetPreview={datasetPreview}
+          isLoadingDatasetPreview={isLoadingDatasetPreview}
           metrics={metrics}
           stageLogs={selectedStage ? stageLogs[selectedStage.id] || [] : []}
-          lossStageLogs={stageLogs.loss || []}
           taskType={taskType}
           targetColumn={selectedColumn}
           explanation={explanation}
@@ -510,17 +504,6 @@ const Pipeline = () => {
       </div>
     </>
   );
-};
-
-const suggestTargetColumn = (columns: DatasetColumn[]) => {
-  if (columns.length === 0) return null;
-
-  const preferredNames = ["target", "label", "class", "outcome", "y", "price", "sale_price"];
-  const preferred = columns.find((column) =>
-    preferredNames.some((name) => column.name.toLowerCase() === name || column.name.toLowerCase().includes(name)),
-  );
-
-  return preferred?.name || columns[columns.length - 1]?.name || null;
 };
 
 const inferTaskType = (columns: DatasetColumn[], selectedColumn: string): TaskType => {

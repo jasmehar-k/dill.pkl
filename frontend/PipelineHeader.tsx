@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { motion } from "framer-motion";
 import { Activity, Brain, Database, Play, Target } from "lucide-react";
-import type { MetricsResponse, TaskType } from "@/lib/api";
+import type { MetricsResponse } from "@/lib/api";
 
 interface PipelineHeaderProps {
   completedCount: number;
@@ -11,11 +11,9 @@ interface PipelineHeaderProps {
   targetColumn: string | null;
   modelName: string | null;
   metrics: MetricsResponse | null;
-  taskType: TaskType;
   canRun: boolean;
   isRunning: boolean;
   onRun: () => Promise<void> | void;
-  onTaskTypeChange: (taskType: TaskType) => void;
 }
 
 const PipelineHeader = ({
@@ -26,11 +24,9 @@ const PipelineHeader = ({
   targetColumn,
   modelName,
   metrics,
-  taskType,
   canRun,
   isRunning,
   onRun,
-  onTaskTypeChange,
 }: PipelineHeaderProps) => {
   const isComplete = completedCount === totalStages;
   const showMetrics = Boolean(metrics && (metrics.accuracy || metrics.r2 !== null));
@@ -56,20 +52,6 @@ const PipelineHeader = ({
         </div>
 
         <div className="flex flex-col items-start gap-3 sm:flex-row sm:items-center">
-          <div className="flex rounded-lg bg-secondary p-1">
-            {(["classification", "regression"] as TaskType[]).map((option) => (
-              <button
-                key={option}
-                onClick={() => onTaskTypeChange(option)}
-                className={`rounded-md px-3 py-1.5 text-[11px] font-medium capitalize transition-colors ${
-                  taskType === option ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"
-                }`}
-              >
-                {option}
-              </button>
-            ))}
-          </div>
-
           <button
             onClick={() => void onRun()}
             disabled={!canRun || isRunning}

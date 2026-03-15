@@ -162,6 +162,28 @@ export interface EvaluationInsightsResponse {
   error?: string | null;
 }
 
+export interface DataQualityProfile {
+  total_missing_cells?: number | null;
+  missing_rows_pct?: number | null;
+  missing_columns_count?: number | null;
+  high_missing_columns?: string[] | null;
+  duplicate_rows?: number | null;
+  duplicate_pct?: number | null;
+  outlier_columns_count?: number | null;
+  max_outlier_pct?: number | null;
+  high_cardinality_columns?: string[] | null;
+  high_cardinality_count?: number | null;
+  placeholder_invalid_count?: number | null;
+  placeholder_invalid_columns?: string[] | null;
+  leakage_risk_columns?: string[] | null;
+}
+
+export interface QualityFlag {
+  severity: "high" | "medium" | "low";
+  message: string;
+  field: string;
+}
+
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL as string | undefined) || "http://127.0.0.1:8000";
 const CHAT_REQUEST_TIMEOUT_MS = 210000;
 const CHAT_APPLY_TIMEOUT_MS = 300000;
@@ -313,6 +335,6 @@ export function getCurrentRevisionState(): Promise<RevisionStateResponse> {
   return apiRequest<RevisionStateResponse>("/api/revisions/current");
 }
 
-export function getDownloadUrl(kind: "model" | "logs"): string {
+export function getDownloadUrl(kind: "model" | "logs" | "deployment-package" | "report"): string {
   return `${API_BASE_URL}/api/results/download/${kind}`;
 }

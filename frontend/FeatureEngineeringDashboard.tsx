@@ -1,12 +1,9 @@
-import { useState } from "react";
 import {
-  BookOpen,
   BrainCircuit,
   Filter,
   GraduationCap,
   Radar,
   Sparkles,
-  TerminalSquare,
 } from "lucide-react";
 import type { TaskType, MetricsResponse } from "@/lib/api";
 import type { PipelineStage } from "@/data/pipelineStages";
@@ -32,8 +29,6 @@ interface FeatureEngineeringDashboardProps {
   targetColumn: string | null;
 }
 
-type NotesTab = "notes" | "technical";
-
 const FeatureEngineeringDashboard = ({
   stage,
   stageResult,
@@ -49,8 +44,6 @@ const FeatureEngineeringDashboard = ({
     taskType,
     targetColumn,
   });
-
-  const [notesTab, setNotesTab] = useState<NotesTab>("notes");
 
   return (
     <TooltipProvider>
@@ -80,32 +73,11 @@ const FeatureEngineeringDashboard = ({
                   </p>
                 </div>
               </div>
-              <div className="glass-card min-w-[220px] border-border/60 bg-background/40 p-4">
-                <div className="flex items-center justify-between gap-3">
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-muted-foreground">
-                    Student Summary
-                  </p>
-                  <span
-                    className={`rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] ${
-                      viewModel.summarySource === "llm"
-                        ? "border border-accent/35 bg-accent/12 text-accent"
-                        : "border border-border/70 bg-background/50 text-muted-foreground"
-                    }`}
-                  >
-                    {viewModel.summarySource === "llm" ? "LLM summary" : "Fallback summary"}
-                  </span>
-                </div>
-                <p className="mt-2 text-sm leading-6 text-foreground/90">{viewModel.summary}</p>
-              </div>
             </div>
           </div>
         </section>
 
-        <NotesAndLogs
-          notesTab={notesTab}
-          onNotesTabChange={setNotesTab}
-          viewModel={viewModel}
-        />
+        <FeatureNotes viewModel={viewModel} />
 
         <section className="grid gap-4 lg:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)]" data-chat-context-label="Feature engineering insights">
           <div className="space-y-4">
@@ -120,69 +92,41 @@ const FeatureEngineeringDashboard = ({
   );
 };
 
-const NotesAndLogs = ({
-  notesTab,
-  onNotesTabChange,
+const FeatureNotes = ({
   viewModel,
 }: {
-  notesTab: NotesTab;
-  onNotesTabChange: (tab: NotesTab) => void;
   viewModel: ReturnType<typeof buildFeatureStageViewModel>;
 }) => (
   <section className="glass-card border-border/60 p-5">
-    <div className="flex flex-wrap items-center justify-between gap-4">
+    <div>
       <div>
         <p className="text-xs font-semibold uppercase tracking-[0.22em] text-muted-foreground">Learning View</p>
         <p className="mt-1 text-sm text-secondary-foreground">
-          Beginner-friendly notes first, with technical logs available when you want the raw detail.
+          Beginner-friendly notes that explain what changed during feature engineering.
         </p>
-      </div>
-      <div className="flex rounded-full border border-border/60 bg-background/35 p-1">
-        <TabButton active={notesTab === "notes"} onClick={() => onNotesTabChange("notes")} icon={BookOpen}>
-          Notes
-        </TabButton>
-        <TabButton active={notesTab === "technical"} onClick={() => onNotesTabChange("technical")} icon={TerminalSquare}>
-          Technical Logs
-        </TabButton>
       </div>
     </div>
 
-    {notesTab === "notes" ? (
-      <div className="mt-5 grid gap-3 lg:grid-cols-3">
-        <NoteCard
-          title="What happened"
-          icon={BrainCircuit}
-          body={viewModel.notes.whatHappened}
-          accent="border-primary/20 bg-primary/10"
-        />
-        <NoteCard
-          title="Why it mattered"
-          icon={Radar}
-          body={viewModel.notes.whyItMattered}
-          accent="border-accent/20 bg-accent/10"
-        />
-        <NoteCard
-          title="Key takeaway"
-          icon={GraduationCap}
-          body={viewModel.notes.keyTakeaway}
-          accent="border-sky-400/20 bg-sky-400/10"
-        />
-      </div>
-    ) : (
-      <div className="mt-5 rounded-2xl border border-border/60 bg-background/35 p-4 font-mono text-[12px]">
-        {viewModel.technicalLogs.length > 0 ? (
-          <div className="max-h-72 space-y-2 overflow-y-auto pr-2 scrollbar-thin">
-            {viewModel.technicalLogs.map((log, index) => (
-              <p key={`${log}-${index}`} className="leading-6 text-foreground/75">
-                {log}
-              </p>
-            ))}
-          </div>
-        ) : (
-          <p className="text-sm text-muted-foreground">No technical logs were captured for this run yet.</p>
-        )}
-      </div>
-    )}
+    <div className="mt-5 grid gap-3 lg:grid-cols-3">
+      <NoteCard
+        title="What happened"
+        icon={BrainCircuit}
+        body={viewModel.notes.whatHappened}
+        accent="border-primary/20 bg-primary/10"
+      />
+      <NoteCard
+        title="Why it mattered"
+        icon={Radar}
+        body={viewModel.notes.whyItMattered}
+        accent="border-accent/20 bg-accent/10"
+      />
+      <NoteCard
+        title="Key takeaway"
+        icon={GraduationCap}
+        body={viewModel.notes.keyTakeaway}
+        accent="border-sky-400/20 bg-sky-400/10"
+      />
+    </div>
   </section>
 );
 
@@ -231,7 +175,7 @@ const NoteCard = ({
 }: {
   title: string;
   body: string;
-  icon: typeof BookOpen;
+  icon: typeof BrainCircuit;
   accent: string;
 }) => (
   <div className={`rounded-2xl border p-4 ${accent}`}>
@@ -395,31 +339,6 @@ const FriendlyFeatureLabel = ({ rawName }: { rawName: string }) => (
       <p className="font-mono text-[11px]">{rawName}</p>
     </TooltipContent>
   </Tooltip>
-);
-
-const TabButton = ({
-  active,
-  onClick,
-  icon: Icon,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  icon: typeof BookOpen;
-  children: React.ReactNode;
-}) => (
-  <button
-    type="button"
-    onClick={onClick}
-    className={`flex items-center gap-2 rounded-full px-3 py-1.5 text-xs transition ${
-      active
-        ? "bg-primary text-primary-foreground"
-        : "text-muted-foreground hover:text-foreground"
-    }`}
-  >
-    <Icon className="h-3.5 w-3.5" />
-    {children}
-  </button>
 );
 
 const readSelectedFeatures = (stageResult: FeatureStageResultLike | null): string[] =>

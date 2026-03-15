@@ -1,7 +1,6 @@
-import { Fragment, type ReactNode, useMemo, useState } from "react";
+import { Fragment, type ReactNode, useMemo } from "react";
 import {
   BarChart3,
-  Bot,
   BrainCircuit,
   CheckCircle2,
   Info,
@@ -31,7 +30,6 @@ import {
   type TaskType,
 } from "@/lib/api";
 import {
-  NOTES_TABS,
   buildBaselineSummary,
   buildClassMetricBars,
   buildConfidenceHistogram,
@@ -57,27 +55,21 @@ interface EvaluationDashboardProps {
   stageResult: EvaluationStageResultLike | null;
   lossStageResult: LossStageResultLike | null;
   metrics: MetricsResponse | null;
-  stageLogs: string[];
   taskType: TaskType;
   targetColumn: string | null;
 }
-
-type NotesTab = "notes" | "technical";
 
 const EvaluationDashboard = ({
   stage,
   stageResult,
   lossStageResult,
   metrics,
-  stageLogs,
   taskType,
   targetColumn,
 }: EvaluationDashboardProps) => {
   const resolvedTaskType = resolveTaskType(stageResult, metrics, taskType);
-  const [notesTab, setNotesTab] = useState<NotesTab>("notes");
   const insights = stageResult?.llm_insights ?? null;
   const displayInsights = insights ?? getUnavailableInsights(resolvedTaskType);
-  const insightsStatusLabel = insights ? "OpenRouter ready" : "Loading Responses";
 
   const highlightCards = useMemo(
     () =>
@@ -106,6 +98,7 @@ const EvaluationDashboard = ({
     | undefined;
   const showTreeMetrics = Boolean(treeMetrics);
   const showLoss = !showTreeMetrics && lossSource === "real";
+  const showTrainingBehaviorSection = showTreeMetrics || showLoss;
   const lossCurveData = useMemo(
     () => (showLoss ? buildLossCurveData(lossStageResult) : []),
     [lossStageResult, showLoss],
@@ -144,12 +137,8 @@ const EvaluationDashboard = ({
               </div>
 
               <div className="glass-card max-w-3xl border-border/60 bg-background/35 p-4">
-                <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.22em] text-muted-foreground">
-                  <Bot className="h-3.5 w-3.5" />
+                <div className="text-xs font-semibold uppercase tracking-[0.22em] text-muted-foreground">
                   Run Summary
-                  <span className="ml-2 rounded-full border border-border/60 px-2 py-0.5 text-[10px] normal-case tracking-normal text-muted-foreground">
-                    {insightsStatusLabel}
-                  </span>
                 </div>
                 <p className="mt-3 text-sm leading-7 text-foreground/90">
                   {displayInsights.stage_summary}
@@ -168,46 +157,20 @@ const EvaluationDashboard = ({
         </section>
 
         <section className="glass-card border-border/60 p-5">
-          <div className="flex flex-wrap items-center justify-between gap-4">
-            <SectionHeading
-              title="Notes vs Technical Logs"
-              icon={BrainCircuit}
-              description="Beginner-friendly teaching notes first, with raw execution logs still available for advanced users."
-            />
-            <div className="flex rounded-full border border-border/60 bg-background/35 p-1">
-              {NOTES_TABS.map((tab) => (
-                <TabButton key={tab.id} active={notesTab === tab.id} onClick={() => setNotesTab(tab.id)}>
-                  {tab.label}
-                </TabButton>
-              ))}
-            </div>
+          <SectionHeading
+            title="Notes"
+            icon={BrainCircuit}
+            description="Beginner-friendly teaching notes for the evaluation stage."
+          />
+          <div className="mt-5 grid gap-3 md:grid-cols-3">
+            {displayInsights.beginner_notes.map((note, index) => (
+              <NoteCard
+                key={`${note}-${index}`}
+                title={index === 0 ? "What happened" : index === 1 ? "What's good" : "What to improve"}
+                body={note}
+              />
+            ))}
           </div>
-
-          {notesTab === "notes" ? (
-            <div className="mt-5 grid gap-3 md:grid-cols-3">
-              {displayInsights.beginner_notes.map((note, index) => (
-                <NoteCard
-                  key={`${note}-${index}`}
-                  title={index === 0 ? "What happened" : index === 1 ? "What's good" : "What to improve"}
-                  body={note}
-                />
-              ))}
-            </div>
-          ) : (
-            <div className="mt-5 rounded-2xl border border-border/60 bg-background/35 p-4 font-mono text-[12px]">
-              {stageLogs.length > 0 ? (
-                <div className="max-h-72 space-y-2 overflow-y-auto pr-2 scrollbar-thin">
-                  {stageLogs.map((log, index) => (
-                    <p key={`${log}-${index}`} className="leading-6 text-foreground/75">
-                      {log}
-                    </p>
-                  ))}
-                </div>
-              ) : (
-                <p className="text-sm text-muted-foreground">No technical logs were captured for this run yet.</p>
-              )}
-            </div>
-          )}
         </section>
 
         <section className="space-y-3">
@@ -223,18 +186,12 @@ const EvaluationDashboard = ({
           <SectionHeading
             title="Model Performance Story"
             icon={Radar}
-            description="A plain-English explanation of how good the model is, what the scores mean, and whether the result looks practically useful."
           />
           <p className="mt-4 text-sm leading-7 text-secondary-foreground">{displayInsights.performance_story}</p>
         </section>
 
-        {showTreeMetrics ? (
+        {showTrainingBehaviorSection && (showTreeMetrics ? (
           <section className="glass-card border-border/60 p-5">
-            <SectionHeading
-              title="Tree Training Progression"
-              icon={LineChart}
-              description="Tree models grow ensembles instead of epochs, so we track score progression as trees are added."
-            />
             <div className="mt-4 grid gap-3 sm:grid-cols-3">
               <StatTile label="Number of trees" value={String(treeMetrics?.num_trees ?? "Pending")} />
               <StatTile label="Final train score" value={formatMetricValue(treeMetrics?.train_scores?.slice(-1)[0], false)} />
@@ -318,14 +275,9 @@ const EvaluationDashboard = ({
             </div>
             <p className="mt-4 text-sm leading-7 text-secondary-foreground">{displayInsights.loss_explanation}</p>
           </section>
-        )}
+        ))}
 
         <section className="space-y-3">
-          <SectionHeading
-            title="Visualization"
-            icon={LineChart}
-            description="Purposeful visuals that show how the model behaved, with plain-English chart explanations underneath."
-          />
           {resolvedTaskType === "regression" ? (
             <div className="grid gap-4 xl:grid-cols-2">
               <ChartCard
@@ -703,26 +655,6 @@ const EmptyChart = ({ message }: { message: string }) => (
   <div className="flex h-full min-h-[12rem] items-center justify-center rounded-2xl border border-dashed border-border/60 bg-background/20 px-6 text-center text-sm text-muted-foreground">
     {message}
   </div>
-);
-
-const TabButton = ({
-  active,
-  onClick,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  children: ReactNode;
-}) => (
-  <button
-    type="button"
-    onClick={onClick}
-    className={`rounded-full px-3 py-1.5 text-xs transition ${
-      active ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"
-    }`}
-  >
-    {children}
-  </button>
 );
 
 const Pill = ({ className, children }: { className: string; children: ReactNode }) => (

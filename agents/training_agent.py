@@ -878,15 +878,20 @@ class TrainingAgent(BaseAgent):
     def _is_model_available(self, model_name: str) -> bool:
         """Check whether optional model dependencies are available."""
         name = model_name.lower()
+        logger.info(f"Checking model availability: {model_name} (normalized: {name})")
         if "xgboost" in name:
             try:
                 import xgboost  # type: ignore  # noqa: F401
-            except Exception:
+                logger.info("XGBoost import successful.")
+            except Exception as e:
+                logger.error(f"XGBoost import failed: {e}")
                 return False
         if "lightgbm" in name:
             try:
                 import lightgbm  # type: ignore  # noqa: F401
-            except Exception:
+                logger.info("LightGBM import successful.")
+            except Exception as e:
+                logger.error(f"LightGBM import failed: {e}")
                 return False
         return True
 

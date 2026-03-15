@@ -1,21 +1,23 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { X } from "lucide-react";
 import type { PipelineStage } from "@/data/pipelineStages";
-import type { DatasetPreviewResponse, DatasetSummary, MetricsResponse, TaskType } from "@/lib/api";
-import { getDatasetPreview } from "@/lib/api";
+import type { DataQualityProfile, DatasetColumn, DatasetPreviewResponse, DatasetSummary, MetricsResponse, QualityFlag, TaskType } from "@/lib/api";
 import FeatureEngineeringDashboard from "./FeatureEngineeringDashboard";
 import EvaluationDashboard from "./EvaluationDashboard";
 import { StageVisualization } from "./StageVisualizations";
+import DatasetSummaryCard from "./DatasetSummary";
 
 interface StageDetailPanelProps {
   stage: PipelineStage | null;
   stageResult: Record<string, unknown> | null;
   lossStageResult?: Record<string, unknown> | null;
   datasetSummary: DatasetSummary | null;
+  datasetColumns?: DatasetColumn[];
+  datasetPreview?: DatasetPreviewResponse | null;
+  isLoadingDatasetPreview?: boolean;
   metrics: MetricsResponse | null;
   stageLogs: string[];
-  lossStageLogs?: string[];
   taskType: TaskType;
   targetColumn: string | null;
   explanation?: Record<string, unknown> | null;
@@ -27,17 +29,16 @@ const StageDetailPanel = ({
   stageResult,
   lossStageResult,
   datasetSummary,
+  datasetColumns = [],
+  datasetPreview = null,
+  isLoadingDatasetPreview = false,
   metrics,
   stageLogs,
-  lossStageLogs,
   taskType,
   targetColumn,
   explanation,
   onClose,
 }: StageDetailPanelProps) => {
-  const [datasetPreview, setDatasetPreview] = useState<DatasetPreviewResponse | null>(null);
-  const [isLoadingPreview, setIsLoadingPreview] = useState(false);
-
   const isFeatureStage = stage?.id === "features";
   const isPreprocessing = stage?.id === "preprocessing";
   const isModelSelection = stage?.id === "model_selection";
@@ -74,20 +75,6 @@ const StageDetailPanel = ({
       return "This stage prepares your dataset using deterministic AutoML-style rules. It detects feature types, removes weak or suspicious columns, chooses how to handle missing values, encodes categories carefully, applies scaling or skew-aware transforms when needed, and creates a leakage-safe train/test split so the model can be evaluated fairly.";
     }
     return stage.details;
-  }, [isPreprocessing, stage]);
-
-  useEffect(() => {
-    if (!isPreprocessing || !stage) {
-      setDatasetPreview(null);
-      setIsLoadingPreview(false);
-      return;
-    }
-
-    setIsLoadingPreview(true);
-    void getDatasetPreview(5)
-      .then(setDatasetPreview)
-      .catch(() => setDatasetPreview(null))
-      .finally(() => setIsLoadingPreview(false));
   }, [isPreprocessing, stage]);
 
   return (
@@ -134,7 +121,6 @@ const StageDetailPanel = ({
                   stageResult={stageResult}
                   lossStageResult={lossStageResult ?? null}
                   metrics={metrics}
-                  stageLogs={[...(lossStageLogs ?? []), ...stageLogs]}
                   taskType={taskType}
                   targetColumn={targetColumn}
                 />
@@ -145,7 +131,7 @@ const StageDetailPanel = ({
                     <p className="text-sm leading-relaxed text-secondary-foreground">{aboutText}</p>
                   </div>
 
-                  {!isPreprocessing && <StageSummaryCard stage={stage} stageResult={stageResult} />}
+                  {!isPreprocessing && !isModelSelection && <StageSummaryCard stage={stage} stageResult={stageResult} />}
 
                   {isResults && (explanationSummary || pipelineSummary || explanationBullets.length > 0) && (
                     <div className="space-y-3">
@@ -215,6 +201,33 @@ const StageDetailPanel = ({
 
                   {stage.id === "training" && buildTrainingComparisonPanel(stageResult)}
 
+                  {stage.id === "analysis" && (
+                    <div className="space-y-2">
+                      <h3 className="text-sm font-medium text-accent">Dataset overview</h3>
+                      <DatasetSummaryCard
+                        summary={datasetSummary}
+                        columns={datasetColumns}
+                        targetColumn={targetColumn}
+                      />
+                    </div>
+                  )}
+
+                  {stage.id === "analysis" && buildAnalysisQualityPanel(stageResult)}
+
+                  {stage.id === "analysis" && (stageResult?.correlations as Record<string, unknown> | undefined) && (
+                    <div className="space-y-2">
+                      <h3 className="text-sm font-medium text-accent">Correlation heatmap</h3>
+                      <div className="glass-card p-4">
+                        <StageVisualization
+                          stage={stage}
+                          stageResult={stageResult}
+                          datasetSummary={datasetSummary}
+                          metrics={metrics}
+                        />
+                      </div>
+                    </div>
+                  )}
+
                   {isModelSelection && buildModelSelectionPanel(stageResult)}
 
                   {isPreprocessing ? (
@@ -245,13 +258,13 @@ const StageDetailPanel = ({
                       {!isResults && (
                         <div className="space-y-2">
                           <h3 className="text-sm font-medium text-accent">Dataset preview</h3>
-                          <DatasetPreviewCard datasetPreview={datasetPreview} isLoadingPreview={isLoadingPreview} />
+                          <DatasetPreviewCard datasetPreview={datasetPreview} isLoadingPreview={isLoadingDatasetPreview} />
                         </div>
                       )}
                     </>
                   ) : (
                     <>
-                      {!isModelSelection && !isResults && (
+                      {!isModelSelection && !isResults && stage.id !== "analysis" && (
                         <StageLogs stage={stage} stageLogs={stageLogs} stageResult={stageResult} metrics={metrics} />
                       )}
                     </>
@@ -398,7 +411,7 @@ const StageSummaryCard = ({
 const getPanelWidthClass = (stageId: string) => {
   if (stageId === "features") return "max-w-[min(96vw,1200px)]";
   if (stageId === "evaluation") return "max-w-[min(96vw,1240px)]";
-  if (stageId === "model_selection" || stageId === "preprocessing") {
+  if (stageId === "model_selection" || stageId === "preprocessing" || stageId === "analysis") {
     return "max-w-[min(92vw,960px)]";
   }
   return "max-w-lg";
@@ -415,6 +428,7 @@ const buildHighlights = (
       return [
         { label: "Rows", value: String(stageResult?.row_count ?? datasetSummary?.rows ?? "Pending") },
         { label: "Features", value: String(stageResult?.feature_count ?? "Pending") },
+        { label: "Risk level", value: String(stageResult?.risk_level ?? "Pending") },
         {
           label: "Recommendations",
           value: String(((stageResult?.recommendations as string[] | undefined) || []).length || "Pending"),
@@ -504,6 +518,104 @@ const buildHighlights = (
   }
 };
 
+const SEVERITY_STYLES: Record<string, string> = {
+  high: "bg-red-500/15 text-red-400 border border-red-500/30",
+  medium: "bg-yellow-500/15 text-yellow-400 border border-yellow-500/30",
+  low: "bg-blue-500/15 text-blue-400 border border-blue-500/30",
+};
+
+const buildAnalysisQualityPanel = (stageResult: Record<string, unknown> | null) => {
+  if (!stageResult) return null;
+
+  const dq = (stageResult.data_quality as DataQualityProfile | undefined) || {};
+  const qualityFlags = (stageResult.quality_flags as QualityFlag[] | undefined) || [];
+  const analysisScore = String(stageResult.analysis_summary || "").trim();
+  const recommendations = (stageResult.recommendations as string[] | undefined) || [];
+
+  const kpis = [
+    {
+      label: "Missing rows",
+      value: dq.missing_rows_pct != null ? `${dq.missing_rows_pct.toFixed(1)}%` : "—",
+    },
+    {
+      label: "Duplicate rows",
+      value: dq.duplicate_rows != null ? `${dq.duplicate_rows.toLocaleString()} (${(dq.duplicate_pct ?? 0).toFixed(1)}%)` : "—",
+    },
+    {
+      label: "Outlier columns",
+      value: dq.outlier_columns_count != null ? String(dq.outlier_columns_count) : "—",
+    },
+    {
+      label: "High cardinality",
+      value: dq.high_cardinality_count != null ? String(dq.high_cardinality_count) : "—",
+    },
+    {
+      label: "Missing columns",
+      value: dq.missing_columns_count != null ? String(dq.missing_columns_count) : "—",
+    },
+    {
+      label: "Leakage signals",
+      value: dq.leakage_risk_columns != null ? String(dq.leakage_risk_columns.length) : "—",
+    },
+  ];
+
+  return (
+    <div className="space-y-4">
+      <div className="space-y-2">
+        <h3 className="text-sm font-medium text-accent">Data quality metrics</h3>
+        <div className="grid grid-cols-3 gap-2">
+          {kpis.map((kpi) => (
+            <div key={kpi.label} className="glass-card space-y-1 p-3">
+              <p className="text-[10px] text-muted-foreground">{kpi.label}</p>
+              <p className="font-mono text-sm text-foreground">{kpi.value}</p>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {qualityFlags.length > 0 && (
+        <div className="space-y-2">
+          <h3 className="text-sm font-medium text-accent">Quality flags</h3>
+          <div className="space-y-2">
+            {qualityFlags.map((flag, index) => (
+              <div
+                key={`${flag.field}-${index}`}
+                className={`flex items-start gap-3 rounded-lg px-3 py-2 text-xs ${SEVERITY_STYLES[flag.severity] ?? "bg-secondary/50 text-foreground"}`}
+              >
+                <span className="mt-px shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide opacity-80">
+                  {flag.severity}
+                </span>
+                <span className="leading-relaxed">{flag.message}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {analysisScore && (
+        <div className="space-y-2">
+          <h3 className="text-sm font-medium text-accent">Analysis summary</h3>
+          <div className="glass-card p-4 text-sm text-secondary-foreground">{analysisScore}</div>
+        </div>
+      )}
+
+      {recommendations.length > 0 && (
+        <div className="space-y-2">
+          <h3 className="text-sm font-medium text-accent">Recommendations</h3>
+          <div className="glass-card space-y-2 p-4">
+            {recommendations.map((rec, index) => (
+              <div key={`rec-${index}`} className="flex items-start gap-2 text-sm text-secondary-foreground">
+                <span className="mt-0.5 shrink-0 text-accent">•</span>
+                <span>{rec}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
 const MODEL_EXPLANATIONS: Record<string, string> = {
   RandomForest:
     "Random Forest is an ensemble of decision trees that averages many models to improve accuracy and reduce overfitting.",
@@ -581,6 +693,21 @@ const formatComparisonParams = (params: Record<string, unknown> | undefined) => 
   return entries.map(([key, value]) => `${key}=${String(value)}`).join(", ");
 };
 
+const formatParamValue = (value: unknown) => {
+  if (typeof value === "number") {
+    if (Number.isInteger(value)) return String(value);
+    return value.toFixed(4).replace(/0+$/, "").replace(/\.$/, "");
+  }
+  if (typeof value === "boolean") return value ? "true" : "false";
+  if (value === null || value === undefined) return "null";
+  return String(value);
+};
+
+const formatFamilyLabel = (modelFamily: unknown) => {
+  if (typeof modelFamily !== "string" || !modelFamily.trim()) return "other";
+  return modelFamily.split("_").join(" ");
+};
+
 const describeDatasetSize = (nSamples: number) => {
   if (nSamples >= 50000) return "Large";
   if (nSamples >= 5000) return "Medium";
@@ -639,33 +766,28 @@ const buildModelSelectionPanel = (stageResult: Record<string, unknown> | null) =
   const complexity = buildComplexity(nSamples, selectedModel);
   const llmSummary = String(stageResult.llm_summary ?? "").trim();
   const selectionReasoning = String(stageResult.selection_reasoning ?? "").trim();
+  const summarySource = llmSummary || selectionReasoning || explanation;
+  const summaryText = summarySource
+    .split(/\n\s*\n|\n/)
+    .map((paragraph) => paragraph.trim())
+    .find(Boolean) || "";
 
   return (
     <div className="space-y-4">
-      <div className="grid gap-3 md:grid-cols-2">
-        <div className="glass-card space-y-2 p-4">
-          <h3 className="text-sm font-medium text-accent">Candidate set</h3>
-          <div className="flex items-center gap-2">
-            <span className="rounded-md bg-accent/10 px-2 py-1 font-mono text-[12px] text-accent">
-              {topCandidates.map((candidate) => String(candidate.model_name ?? "")).filter(Boolean).join(", ") || "Pending"}
-            </span>
-          </div>
-        </div>
-        <div className="glass-card space-y-2 p-4">
-          <h3 className="text-sm font-medium text-accent">About this candidate set</h3>
-          <p className="text-[11px] text-secondary-foreground">{explanation}</p>
+      <div className="glass-card space-y-2 p-4">
+        <h3 className="text-sm font-medium text-accent">Candidate set</h3>
+        <div className="flex items-center gap-2">
+          <span className="rounded-md bg-accent/10 px-2 py-1 font-mono text-[12px] text-accent">
+            {topCandidates.map((candidate) => String(candidate.model_name ?? "")).filter(Boolean).join(", ") || "Pending"}
+          </span>
         </div>
       </div>
 
-      {llmSummary && (
+      {summaryText && (
         <div className="space-y-2">
           <h3 className="text-sm font-medium text-accent">Model selection summary</h3>
-          <div className="glass-card p-4 text-sm text-secondary-foreground">{llmSummary}</div>
+          <div className="glass-card whitespace-pre-wrap p-4 text-sm text-secondary-foreground">{summaryText}</div>
         </div>
-      )}
-
-      {selectionReasoning && (
-        <div className="glass-card p-4 text-[11px] text-secondary-foreground">{selectionReasoning}</div>
       )}
 
       <div className="glass-card space-y-2 p-4">
@@ -791,35 +913,124 @@ const buildModelSelectionPanel = (stageResult: Record<string, unknown> | null) =
 const buildTrainingComparisonPanel = (stageResult: Record<string, unknown> | null) => {
   if (!stageResult) return null;
 
-  const comparisons = getModelComparisons(stageResult);
+  const comparisons = getModelComparisons(stageResult)
+    .slice()
+    .sort((a, b) => {
+      const scoreA = typeof a.cv_mean === "number" ? a.cv_mean : Number.NEGATIVE_INFINITY;
+      const scoreB = typeof b.cv_mean === "number" ? b.cv_mean : Number.NEGATIVE_INFINITY;
+      return scoreB - scoreA;
+    });
   const trainingMode = String(stageResult.training_mode || "");
   const hasComparisons = comparisons.length > 0;
+  const bestModelName = String(stageResult.model_name || comparisons[0]?.model_name || "Pending");
+  const bestCv = typeof comparisons[0]?.cv_mean === "number" ? comparisons[0].cv_mean : null;
+  const rawWorstCv = comparisons.length > 0 ? comparisons[comparisons.length - 1]?.cv_mean : null;
+  const worstCv = typeof rawWorstCv === "number" ? rawWorstCv : bestCv;
+  const scoreSpan = bestCv !== null && worstCv !== null ? Math.max(bestCv - worstCv, 1e-6) : 1;
 
   if (!hasComparisons && trainingMode !== "multi_model") {
     return null;
   }
 
   return (
-    <div className="space-y-3">
-      <h3 className="text-sm font-medium text-accent">Model comparison</h3>
-      <div className="glass-card space-y-2 p-4 text-[11px] text-secondary-foreground">
+    <div className="space-y-4">
+      <h3 className="text-sm font-medium text-accent">Model training experiments</h3>
+
+      <div className="grid gap-2 md:grid-cols-2">
+        <div className="glass-card space-y-1 p-3">
+          <p className="text-[10px] text-muted-foreground">Compared models</p>
+          <p className="font-mono text-sm text-foreground">{hasComparisons ? comparisons.length : "Pending"}</p>
+        </div>
+        <div className="glass-card space-y-1 p-3">
+          <p className="text-[10px] text-muted-foreground">Best CV score</p>
+          <p className="font-mono text-sm text-foreground">{bestCv !== null ? bestCv.toFixed(4) : "Pending"}</p>
+        </div>
+      </div>
+
+      <div className="glass-card space-y-3 p-4 text-[11px] text-secondary-foreground">
         {hasComparisons ? (
-          <div className="space-y-2">
+          <div className="space-y-3">
             {comparisons.map((item, index) => {
               const modelName = String(item.model_name || "Model");
+              const family = formatFamilyLabel(item.model_family);
               const cvMean = typeof item.cv_mean === "number" ? item.cv_mean : null;
               const cvStd = typeof item.cv_std === "number" ? item.cv_std : null;
+              const foldScores = Array.isArray(item.cv_scores)
+                ? item.cv_scores.filter((value): value is number => typeof value === "number")
+                : [];
               const params = item.hyperparameters as Record<string, unknown> | undefined;
+              const paramEntries = Object.entries(params || {})
+                .sort(([left], [right]) => left.localeCompare(right))
+                .slice(0, 8);
+              const scoreWidth =
+                cvMean !== null && bestCv !== null
+                  ? Math.max(((cvMean - (worstCv ?? cvMean)) / scoreSpan) * 100, 8)
+                  : 8;
+              const isWinner = modelName === bestModelName;
+
               return (
-                <div key={`${modelName}-${index}`} className="rounded-lg bg-secondary/50 px-3 py-2">
+                <div
+                  key={`${modelName}-${index}`}
+                  className={`rounded-lg border p-3 ${
+                    isWinner ? "border-accent/60 bg-accent/10" : "border-border/60 bg-secondary/40"
+                  }`}
+                >
                   <div className="flex flex-wrap items-center justify-between gap-2">
-                    <span className="font-mono text-[11px] text-foreground">{modelName}</span>
-                    <span className="text-[10px] text-muted-foreground">
-                      CV {cvMean !== null ? cvMean.toFixed(3) : "n/a"} ± {cvStd !== null ? cvStd.toFixed(3) : "n/a"}
-                    </span>
+                    <div className="flex min-w-0 items-center gap-2">
+                      <span className="rounded-md bg-secondary px-2 py-1 text-[10px] text-muted-foreground">#{index + 1}</span>
+                      <span className="truncate font-mono text-[11px] text-foreground">{modelName}</span>
+                      <span className="rounded-md bg-secondary px-2 py-1 text-[10px] text-muted-foreground">{family}</span>
+                      {isWinner && <span className="rounded-md bg-accent/20 px-2 py-1 text-[10px] text-accent">selected</span>}
+                    </div>
+                    <div className="text-right">
+                      <p className="font-mono text-[11px] text-foreground">
+                        {cvMean !== null ? cvMean.toFixed(4) : "n/a"}
+                        <span className="text-muted-foreground"> ± {cvStd !== null ? cvStd.toFixed(4) : "n/a"}</span>
+                      </p>
+                      <p className="text-[10px] text-muted-foreground">CV mean ± std</p>
+                    </div>
                   </div>
-                  <div className="mt-1 text-[10px] text-muted-foreground">
-                    Params: {formatComparisonParams(params)}
+
+                  <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-secondary">
+                    <div
+                      className="h-full rounded-full"
+                      style={{
+                        width: `${scoreWidth}%`,
+                        background: "linear-gradient(90deg, hsl(265 80% 60%), hsl(145 70% 50%))",
+                      }}
+                    />
+                  </div>
+
+                  <div className="mt-2 grid gap-2 md:grid-cols-2">
+                    <div className="space-y-1">
+                      <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Fold scores</p>
+                      {foldScores.length > 0 ? (
+                        <div className="flex flex-wrap gap-1">
+                          {foldScores.map((score, scoreIndex) => (
+                            <span key={`${modelName}-fold-${scoreIndex}`} className="rounded bg-secondary px-2 py-1 font-mono text-[10px] text-foreground/90">
+                              F{scoreIndex + 1}: {score.toFixed(3)}
+                            </span>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="text-[10px] text-muted-foreground">Fold-level scores unavailable.</p>
+                      )}
+                    </div>
+
+                    <div className="space-y-1">
+                      <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Hyperparameters</p>
+                      {paramEntries.length > 0 ? (
+                        <div className="flex flex-wrap gap-1">
+                          {paramEntries.map(([key, value]) => (
+                            <span key={`${modelName}-${key}`} className="rounded bg-secondary px-2 py-1 font-mono text-[10px] text-foreground/90">
+                              {key}={formatParamValue(value)}
+                            </span>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="text-[10px] text-muted-foreground">{formatComparisonParams(params)}</p>
+                      )}
+                    </div>
                   </div>
                 </div>
               );
@@ -827,7 +1038,7 @@ const buildTrainingComparisonPanel = (stageResult: Record<string, unknown> | nul
           </div>
         ) : (
           <p className="text-xs text-muted-foreground">
-            Multi-model comparison is enabled, but results are not available yet.
+            Multi-model comparison is enabled, but experiment results are not available yet.
           </p>
         )}
       </div>

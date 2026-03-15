@@ -6,16 +6,25 @@ and retrieve results.
 """
 
 import json
+import os
 import shutil
 import uuid
+import warnings
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, Union
+
+# Disable joblib memory mapping to prevent resource tracker warnings
+os.environ['JOBLIB_MMAP_MODE'] = ''
+
+# Suppress joblib resource tracker warnings
+warnings.filterwarnings("ignore", message="resource_tracker: There appear to be .* leaked .* objects", category=UserWarning)
+warnings.filterwarnings("ignore", message="resource_tracker: .*FileNotFoundError", category=UserWarning)
 
 import numpy as np
 import pandas as pd
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from pydantic import BaseModel
 from agents.chatbot_orchestrator import ChatbotOrchestrator
 from config import settings
@@ -44,6 +53,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 
 pipeline_state = PipelineState()
 chat_client = OpenRouterClient("ChatAssistant", model_name=settings.chat_model_name)
@@ -216,6 +226,26 @@ def summarize_stage_result(stage: str, result: Optional[dict[str, Any]]) -> Opti
         return None
 
     stage_keys: dict[str, list[str]] = {
+        "analysis": [
+            "row_count",
+            "column_count",
+            "feature_count",
+            "numeric_columns",
+            "categorical_columns",
+            "missing_values",
+            "high_missing_columns",
+            "correlations",
+            "high_correlation_pairs",
+            "outliers",
+            "class_distribution",
+            "target_column",
+            "recommendations",
+            "analysis_summary",
+            "risk_level",
+            "data_quality",
+            "quality_flags",
+            "llm_used",
+        ],
         "training": [
             "model_name",
             "best_score",
@@ -249,6 +279,10 @@ def summarize_stage_result(stage: str, result: Optional[dict[str, Any]]) -> Opti
             "pipeline_id",
             "deployment_success",
             "deployment_code",
+            "package_path",
+            "package_ready",
+            "report_path",
+            "report_ready",
         ],
     }
 
@@ -515,8 +549,7 @@ def _should_skip_compact_chat_retry(error: Exception) -> bool:
     )
     return any(marker in detail for marker in non_recoverable_markers)
 
-
-def persist_evaluation_insights(pipeline_id: str | None, insights: dict[str, Any]) -> str | None:
+def persist_evaluation_insights(pipeline_id: Optional[str], insights: dict[str, Any]) -> Optional[str]:
     """Persist the structured evaluation insights as JSON for the current run."""
     if not pipeline_id:
         return None
@@ -614,6 +647,33 @@ def maybe_record_revision(reason: str, changed_stages: list[str]) -> None:
             changed_configs={},
         )
 
+def cleanup_upload() -> bool:
+    """Delete the uploaded dataset file from disk for privacy."""
+    path = pipeline_state.dataset_path
+    if not path:
+        return False
+
+    file_path = Path(path)
+    try:
+        if file_path.exists():
+            file_path.unlink()
+            logger.info("Upload cleanup: deleted %s", file_path)
+        else:
+            logger.info("Upload cleanup: file already missing %s", file_path)
+    except Exception as exc:  # pragma: no cover - best-effort cleanup
+        logger.warning("Upload cleanup failed for %s: %s", file_path, exc)
+        return False
+    finally:
+        pipeline_state.dataset_path = None
+    return True
+
+
+def start_new_pipeline_run() -> str:
+    """Generate and assign a fresh pipeline ID for the current run."""
+    pipeline_state.pipeline_id = str(uuid.uuid4())
+    logger.info("New pipeline run id=%s", pipeline_state.pipeline_id)
+    return pipeline_state.pipeline_id
+
 
 async def run_pipeline_stage(stage: str, config: PipelineConfig):
     """Run a single pipeline stage and update state."""
@@ -639,7 +699,22 @@ async def run_pipeline_stage(stage: str, config: PipelineConfig):
             )
             pipeline_state.stage_results["analysis"] = result
             add_agent_summary_logs("analysis", result)
-            add_log(stage, f"Analysis complete: {result.get('row_count', 0)} rows, {result.get('feature_count', 0)} features")
+            risk = result.get("risk_level") or "n/a"
+            add_log(
+                stage,
+                f"Analysis complete: {result.get('row_count', 0)} rows, "
+                f"{result.get('feature_count', 0)} features, risk={risk}",
+            )
+            dq = result.get("data_quality") or {}
+            quality_parts: list[str] = []
+            if dq.get("duplicate_rows", 0):
+                quality_parts.append(f"{dq['duplicate_rows']} duplicate rows")
+            if dq.get("placeholder_invalid_count", 0):
+                quality_parts.append(f"{dq['placeholder_invalid_count']} placeholder-invalid column(s)")
+            if dq.get("leakage_risk_columns"):
+                quality_parts.append(f"{len(dq['leakage_risk_columns'])} leakage-risk column(s)")
+            if quality_parts:
+                add_log(stage, "Quality signals: " + ", ".join(quality_parts))
 
         elif stage == "preprocessing":
             from agents.preprocessor_agent import PreprocessorAgent
@@ -678,6 +753,7 @@ async def run_pipeline_stage(stage: str, config: PipelineConfig):
 
             analysis = pipeline_state.stage_results.get("analysis", {})
             features = pipeline_state.stage_results.get("features", {})
+            model_selection = pipeline_state.stage_results.get("model_selection", {})
             agent = ModelSelectionAgent()
             model_result = await agent.run(
                 pipeline_state.dataset,
@@ -834,16 +910,12 @@ async def run_pipeline_stage(stage: str, config: PipelineConfig):
 
             training = pipeline_state.stage_results.get("training", {})
             evaluation = pipeline_state.stage_results.get("evaluation", {})
-            agent = DeploymentAgent()
-            result = await agent.run(
-                training,
-                evaluation,
-                pipeline_state.pipeline_id
-            )
-            pipeline_state.stage_results["results"] = result
-            add_agent_summary_logs("results", result)
-            add_log(stage, f"Model saved to: {result.get('model_path', 'unknown')}")
+            analysis = pipeline_state.stage_results.get("analysis", {})
+            preprocessing = pipeline_state.stage_results.get("preprocessing", {})
+            features = pipeline_state.stage_results.get("features", {})
+            model_selection = pipeline_state.stage_results.get("model_selection", {})
 
+            # Run explanation first so README generation has richer context
             explanation_agent = ExplanationGeneratorAgent()
             explanation_result = await explanation_agent.run(
                 training,
@@ -855,13 +927,36 @@ async def run_pipeline_stage(stage: str, config: PipelineConfig):
                     "model_selection": pipeline_state.stage_results.get("model_selection", {}),
                     "training": training,
                     "evaluation": evaluation,
-                    "deployment": result,
                 },
             )
             pipeline_state.stage_results["explanation"] = explanation_result
             add_agent_summary_logs("results", explanation_result)
             add_log(stage, "Explanation summary generated")
 
+            agent = DeploymentAgent()
+            result = await agent.run(
+                training,
+                evaluation,
+                pipeline_state.pipeline_id,
+                dataset_name=pipeline_state.dataset_filename,
+                analysis_result=analysis,
+                preprocessing_result=preprocessing,
+                features_result=features,
+                model_selection_result=model_selection,
+                explanation_result=explanation_result,
+                raw_dataset=pipeline_state.dataset,
+                target_column=pipeline_state.target_column,
+            )
+            pipeline_state.stage_results["results"] = result
+            add_agent_summary_logs("results", result)
+            add_log(stage, f"Model saved to: {result.get('model_path', 'unknown')}")
+            if result.get("package_ready"):
+                add_log(stage, "Deployment package ready for download")
+            if result.get("report_ready"):
+                add_log(stage, "Pipeline report is ready (HTML)")
+                
+            cleanup_upload()
+        
         pipeline_state.stage_statuses[stage] = "completed"
         add_log(stage, f"{stage} stage completed successfully")
         logger.info(
@@ -1052,6 +1147,7 @@ async def start_pipeline(config: PipelineConfig = PipelineConfig()):
         raise HTTPException(status_code=400, detail="Target column not set")
 
     pipeline_state.update_pipeline_config(config.model_dump())
+    start_new_pipeline_run()
 
     # Run all stages sequentially
     stages_order = ["analysis", "preprocessing", "features", "model_selection", "training", "loss", "evaluation", "results"]
@@ -1076,6 +1172,9 @@ async def run_stage(stage_id: str, config: PipelineConfig = PipelineConfig()):
     """Run a specific pipeline stage."""
     if pipeline_state.dataset is None:
         raise HTTPException(status_code=404, detail="No dataset uploaded")
+
+    if not pipeline_state.pipeline_id:
+        start_new_pipeline_run()
 
     if stage_id not in pipeline_state.stage_statuses:
         raise HTTPException(status_code=404, detail=f"Stage '{stage_id}' not found")
@@ -1204,6 +1303,43 @@ async def download_model():
         filename="model.pkl",
         media_type="application/octet-stream"
     )
+
+
+@app.get("/api/results/download/deployment-package")
+async def download_deployment_package():
+    """Download the complete deployment package zip."""
+    results = pipeline_state.stage_results.get("results", {})
+    package_path = results.get("package_path")
+
+    if not package_path or not Path(package_path).exists():
+        raise HTTPException(
+            status_code=404,
+            detail="Deployment package not available. Run the full pipeline first.",
+        )
+
+    pipeline_id = pipeline_state.pipeline_id or "pipeline"
+    filename = f"deployment_package_{pipeline_id[:8]}.zip"
+    return FileResponse(
+        path=package_path,
+        filename=filename,
+        media_type="application/zip",
+    )
+
+
+@app.get("/api/results/download/report")
+async def download_report():
+    """Download the generated pipeline HTML report."""
+    results = pipeline_state.stage_results.get("results", {})
+    report_path = results.get("report_path")
+
+    if not report_path or not Path(report_path).exists():
+        raise HTTPException(
+            status_code=404,
+            detail="Pipeline report not available. Run the full pipeline first.",
+        )
+
+    content = Path(report_path).read_text(encoding="utf-8")
+    return HTMLResponse(content=content)
 
 
 @app.get("/api/results/download/logs")
