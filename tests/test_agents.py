@@ -946,6 +946,43 @@ class TestDeploymentAgent:
         pinned = [line for line in reqs.splitlines() if "==" in line]
         assert len(pinned) > 0, "At least some packages should have pinned versions"
 
+    @pytest.mark.asyncio
+    async def test_deployment_schema_uses_model_feature_names_in(self) -> None:
+        """When training_result.feature_names is absent, schema should use model.feature_names_in_."""
+        import json
+        import zipfile
+        import pandas as pd
+
+        class DummyModel:
+            feature_names_in_ = np.array(["clarity", "color", "depth__div__carat"])
+
+        train_df = pd.DataFrame({
+            "clarity": ["SI2", "VS1", "SI1", "VVS2"],
+            "color": ["E", "D", "F", "E"],
+            "depth__div__carat": [24.0, 20.0, 18.0, 17.0],
+            "target": [0, 1, 0, 1],
+        })
+        model = DummyModel()
+
+        agent = DeploymentAgent()
+        result = await agent.execute(
+            training_result={"model": model, "model_name": "RF"},
+            evaluation_result={"task_type": "classification", "accuracy": 0.9, "deployment_decision": "deploy"},
+            pipeline_id="test_feature_names_in_pipeline",
+            preprocessing_result={
+                "numeric_columns": ["depth__div__carat"],
+                "categorical_columns": ["clarity", "color"],
+                "encoding_mapping": {},
+            },
+            raw_dataset=train_df,
+            target_column="target",
+        )
+
+        with zipfile.ZipFile(result["package_path"], "r") as zf:
+            schema = json.loads(zf.read("schema.json"))
+
+        assert schema["feature_order"] == ["clarity", "color", "depth__div__carat"]
+
     def test_report_generator_outputs_html(self) -> None:
         """Report generator should return HTML with key panel sections."""
         generator = ReportGenerator()

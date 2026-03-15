@@ -267,6 +267,18 @@ class DeploymentAgent(BaseAgent):
 
         # Feature order the trained model expects
         feature_order: list[str] = training_result.get("feature_names", [])
+        trained_model = training_result.get("model")
+        if not feature_order and trained_model is not None:
+            # sklearn estimators
+            model_feature_names = getattr(trained_model, "feature_names_in_", None)
+            if model_feature_names is not None:
+                feature_order = [str(name) for name in model_feature_names]
+            else:
+                # LightGBM sklearn wrapper often exposes `feature_name_`
+                lgbm_feature_names = getattr(trained_model, "feature_name_", None)
+                if isinstance(lgbm_feature_names, list):
+                    feature_order = [str(name) for name in lgbm_feature_names]
+
         if not feature_order:
             feature_order = list(numeric_cols)
             for col in categorical_cols:
@@ -426,22 +438,69 @@ class DeploymentAgent(BaseAgent):
             # ── Preprocessing ─────────────────────────────────────────────────────────
 
             def preprocess(data: dict[str, Any]) -> pd.DataFrame:
-                """Apply train-time preprocessing and return a model-ready DataFrame."""
-                row: dict[str, float] = {{}}
+                """Apply train-time preprocessing and return a model-ready DataFrame.
+
+                Notes:
+                - Preserves raw categorical columns when the trained model expects them.
+                - Adds one-hot columns only when FEATURE_ORDER indicates they are needed.
+                - Recomputes simple engineered numeric interactions (e.g. a__div__b).
+                """
+                row: dict[str, Any] = {{}}
                 for col in NUMERIC_COLUMNS:
                     val = data.get(col)
                     if val is None or (isinstance(val, float) and np.isnan(val)):
                         num = float(TRAIN_MEDIANS.get(col, 0.0))
                     else:
                         num = float(val)
-                    mean = float(TRAIN_MEANS.get(col, 0.0))
-                    std  = float(TRAIN_STDS.get(col, 1.0)) or 1.0
-                    row[col] = (num - mean) / std
+                    row[col] = num
                 for col in CATEGORICAL_COLUMNS:
                     val_str = str(data.get(col, "")) if data.get(col) is not None else ""
-                    cats = ENCODING_MAPPING.get(col, ALLOWED_CATEGORIES.get(col, []))
-                    for cat in cats:
-                        row[f"{{col}}_{{cat}}"] = 1 if val_str == str(cat) else 0
+
+                    # Keep raw categorical value when model expects raw feature names.
+                    if not FEATURE_ORDER or col in FEATURE_ORDER:
+                        row[col] = val_str
+
+                    # Add one-hot columns only when FEATURE_ORDER explicitly expects them.
+                    expects_one_hot = any(feat.startswith(f"{{col}}_") for feat in FEATURE_ORDER)
+                    if expects_one_hot:
+                        cats = ENCODING_MAPPING.get(col, ALLOWED_CATEGORIES.get(col, []))
+                        for cat in cats:
+                            row[f"{{col}}_{{cat}}"] = 1 if val_str == str(cat) else 0
+
+                def _num(name: str) -> float | None:
+                    value = row.get(name)
+                    if value is None:
+                        return None
+                    try:
+                        return float(value)
+                    except (TypeError, ValueError):
+                        return None
+
+                # Rebuild simple engineered interaction features when expected.
+                for feat in FEATURE_ORDER:
+                    if feat in row:
+                        continue
+                    if "__div__" in feat:
+                        left, right = feat.split("__div__", 1)
+                        lv, rv = _num(left), _num(right)
+                        if lv is not None and rv is not None:
+                            row[feat] = 0.0 if abs(rv) < 1e-12 else lv / rv
+                    elif "__mul__" in feat:
+                        left, right = feat.split("__mul__", 1)
+                        lv, rv = _num(left), _num(right)
+                        if lv is not None and rv is not None:
+                            row[feat] = lv * rv
+                    elif "__add__" in feat:
+                        left, right = feat.split("__add__", 1)
+                        lv, rv = _num(left), _num(right)
+                        if lv is not None and rv is not None:
+                            row[feat] = lv + rv
+                    elif "__sub__" in feat:
+                        left, right = feat.split("__sub__", 1)
+                        lv, rv = _num(left), _num(right)
+                        if lv is not None and rv is not None:
+                            row[feat] = lv - rv
+
                 aligned = {{feat: row.get(feat, 0.0) for feat in FEATURE_ORDER}}
                 if not FEATURE_ORDER:
                     aligned = row  # type: ignore[assignment]
@@ -533,6 +592,10 @@ class DeploymentAgent(BaseAgent):
         """Generate a minimal production Dockerfile."""
         return dedent("""\
             FROM python:3.11-slim
+
+            RUN apt-get update \
+                && apt-get install -y --no-install-recommends libgomp1 curl \
+                && rm -rf /var/lib/apt/lists/*
 
             WORKDIR /app
 
@@ -657,7 +720,7 @@ class DeploymentAgent(BaseAgent):
             max_tokens=1500,
         )
         if llm_text and len(llm_text.strip()) > 100:
-            return llm_text
+            return self._ensure_compose_instructions(llm_text)
 
         # ── Deterministic fallback ─────────────────────────────────────────
         numeric_rows = "".join(f"| `{c}` | numeric |\n" for c in numeric_cols[:8])
@@ -742,6 +805,30 @@ class DeploymentAgent(BaseAgent):
             - This model was trained on a specific dataset; distribution shift in inputs may reduce accuracy.
             - The preprocessing logic in `app.py` must match the original training pipeline — verify with `schema.json`.
         """)
+
+    def _ensure_compose_instructions(self, readme_text: str) -> str:
+        """Ensure generated README includes Docker Compose startup commands."""
+        normalized = readme_text.lower()
+        if "docker compose up" in normalized or "docker-compose up" in normalized:
+            return readme_text
+
+        compose_block = dedent("""
+
+            ## Quick start (Docker)
+
+            Run the API with Docker Compose:
+
+            ```bash
+            docker compose up --build
+            ```
+
+            If Compose tries to pull a non-existent prebuilt image first, use:
+
+            ```bash
+            docker compose up --build --pull never
+            ```
+        """)
+        return readme_text.rstrip() + compose_block
 
     # ── Legacy helper (kept for API backward compatibility) ─────────────────
 
