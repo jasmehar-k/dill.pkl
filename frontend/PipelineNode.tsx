@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { motion } from "framer-motion";
 import { AlertCircle, Check, Loader2 } from "lucide-react";
 import { StageStatus, PipelineStage } from "@/data/pipelineStages";
@@ -17,6 +18,20 @@ interface PipelineNodeProps {
 
 const PipelineNode = ({ stage, status, index, onClick }: PipelineNodeProps) => {
   const isClickable = status === "completed" || status === "failed";
+  const [iconLoadFailed, setIconLoadFailed] = useState(false);
+
+  const renderStageIcon = (className = "h-16 w-16 object-contain") =>
+    iconLoadFailed ? (
+      <span>{stage.icon}</span>
+    ) : (
+      <img
+        src={stage.iconPath}
+        alt=""
+        className={className}
+        loading="lazy"
+        onError={() => setIconLoadFailed(true)}
+      />
+    );
 
   const nodeContent = (
     <motion.button
@@ -27,8 +42,8 @@ const PipelineNode = ({ stage, status, index, onClick }: PipelineNodeProps) => {
       transition={{ delay: index * 0.1, duration: 0.4 }}
     >
       <motion.div
-        className={`relative w-16 h-16 rounded-2xl flex items-center justify-center text-2xl transition-all duration-500 border
-          ${status === "waiting" ? "bg-secondary border-border/50 opacity-40" : ""}
+        className={`relative h-24 w-24 rounded-[1.75rem] flex items-center justify-center text-2xl transition-all duration-500 border
+          ${status === "waiting" ? "bg-secondary/85 border-border/50" : ""}
           ${status === "running" ? "bg-secondary border-primary/60 glow-purple" : ""}
           ${status === "completed" ? "bg-accent/10 border-accent/80 glow-green-sm group-hover:glow-green" : ""}
           ${status === "failed" ? "bg-destructive/10 border-destructive/70" : ""}
@@ -50,7 +65,7 @@ const PipelineNode = ({ stage, status, index, onClick }: PipelineNodeProps) => {
           <AlertCircle className="w-6 h-6 text-destructive" />
         ) : status === "completed" ? (
           <div className="relative">
-            <span className="opacity-60">{stage.icon}</span>
+            <div>{renderStageIcon()}</div>
             <motion.div
               className="absolute -top-1 -right-2 w-5 h-5 rounded-full bg-accent flex items-center justify-center"
               initial={{ scale: 0 }}
@@ -61,12 +76,12 @@ const PipelineNode = ({ stage, status, index, onClick }: PipelineNodeProps) => {
             </motion.div>
           </div>
         ) : (
-          <span>{stage.icon}</span>
+          renderStageIcon()
         )}
       </motion.div>
 
       <span
-        className={`text-xs font-medium transition-colors duration-500 max-w-[80px] text-center leading-tight
+        className={`text-sm font-medium transition-colors duration-500 max-w-[110px] text-center leading-tight
           ${status === "waiting" ? "text-muted-foreground/40" : ""}
           ${status === "running" ? "text-primary" : ""}
           ${status === "completed" ? "text-foreground group-hover:text-accent" : ""}
@@ -86,7 +101,7 @@ const PipelineNode = ({ stage, status, index, onClick }: PipelineNodeProps) => {
       <HoverCardContent className="w-72 glass-card border-border/50 p-0 overflow-hidden" side="bottom" sideOffset={12}>
         <div className="p-3 border-b border-border/30">
           <div className="flex items-center gap-2 mb-1">
-            <span className="text-lg">{stage.icon}</span>
+            <div className="flex h-8 w-8 items-center justify-center">{renderStageIcon("h-8 w-8 object-contain")}</div>
             <span className="text-sm font-semibold text-foreground">{stage.label}</span>
             {status === "completed" && (
               <span className="ml-auto text-[10px] font-mono text-accent">✓ done</span>

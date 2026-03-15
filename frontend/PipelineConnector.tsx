@@ -7,7 +7,7 @@ interface PipelineConnectorProps {
 
 const PipelineConnector = ({ completed, running }: PipelineConnectorProps) => {
   return (
-    <div className="relative flex items-center w-12 md:w-20 h-16 -mx-1">
+    <div className="relative flex h-24 min-w-8 flex-1 items-center px-1 md:px-2">
       <div className="w-full h-[2px] bg-border/30 rounded-full" />
       <motion.div
         className="absolute left-0 top-1/2 -translate-y-1/2 h-[2px] rounded-full"

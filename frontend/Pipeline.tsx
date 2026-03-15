@@ -30,6 +30,7 @@ import PipelineNode from "./PipelineNode";
 import PredictionTarget from "./PredictionTarget";
 import ResultsPanel from "./ResultsPanel";
 import StageDetailPanel from "./StageDetailPanel";
+import TitleComponent from "./TitleComponent";
 
 const HIDDEN_STAGE_IDS = new Set(["loss"]);
 const VISIBLE_STAGES = stages.filter((stage) => !HIDDEN_STAGE_IDS.has(stage.id));
@@ -398,7 +399,18 @@ const Pipeline = () => {
   return (
     <>
       <NeuralBackground />
-      <div className="relative z-10 mx-auto w-full max-w-6xl space-y-5 px-4 py-8">
+      <div className="relative z-10 mx-auto w-full max-w-6xl space-y-5 px-4 pb-8 pt-4 sm:pt-6">
+        <div className="relative z-20 mb-6 flex items-end gap-4 sm:mb-8 sm:gap-6">
+          <img
+            src="/stage-icons/logo.png"
+            alt="dill.pkl logo"
+            className="block h-auto w-24 object-contain sm:w-32 md:w-36 lg:w-40"
+          />
+          <div className="translate-y-1 sm:translate-y-2">
+            <TitleComponent />
+          </div>
+        </div>
+
         <PipelineHeader
           completedCount={completedCount}
           totalStages={VISIBLE_STAGES.length}
@@ -437,9 +449,12 @@ const Pipeline = () => {
           onSelect={handleTargetSelect}
         />
 
-        <div className="flex items-start justify-center overflow-x-auto pb-4 pt-2">
+        <div className="flex w-full items-start pb-6 pt-3">
           {VISIBLE_STAGES.map((stage, index) => (
-            <div key={stage.id} className="flex items-start">
+            <div
+              key={stage.id}
+              className={index < VISIBLE_STAGES.length - 1 ? "flex min-w-0 flex-1 items-start" : "flex shrink-0 items-start"}
+            >
               <PipelineNode
                 stage={stage}
                 status={getVisibleStageStatus(stage.id)}

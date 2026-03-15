@@ -32,19 +32,18 @@ const PipelineHeader = ({
   const showMetrics = Boolean(metrics && (metrics.accuracy || metrics.r2 !== null));
 
   return (
-    <div className="glass-card space-y-4 p-5" data-chat-context-label="Pipeline header">
+    <div className="glass-card space-y-9 p-10" data-chat-context-label="Pipeline header">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div className="flex items-center gap-3">
-          <span className="text-2xl">dill.pkl</span>
           <div>
-            <h1 className="gradient-text font-mono text-xl font-bold">Agentic AutoML</h1>
+            <h1 className="gradient-text font-mono text-2xl font-bold md:text-3xl">Agentic AutoML</h1>
             <div className="mt-0.5 flex items-center gap-2">
               <motion.div
                 className={`h-2 w-2 rounded-full ${isComplete ? "bg-accent" : isRunning ? "bg-primary" : "bg-muted-foreground"}`}
                 animate={isRunning ? { scale: [1, 1.3, 1], opacity: [1, 0.5, 1] } : {}}
                 transition={{ duration: 1.5, repeat: Infinity }}
               />
-              <span className="text-xs font-mono text-muted-foreground">
+              <span className="text-sm font-mono text-muted-foreground">
                 {isComplete ? "Pipeline complete" : isRunning ? "Agents running..." : "Ready"}
               </span>
             </div>
@@ -55,7 +54,7 @@ const PipelineHeader = ({
           <button
             onClick={() => void onRun()}
             disabled={!canRun || isRunning}
-            className="flex items-center gap-2 rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-accent-foreground transition-transform hover:scale-[1.01] disabled:cursor-not-allowed disabled:opacity-50"
+            className="flex items-center gap-2 rounded-lg bg-accent px-5 py-2.5 text-base font-semibold text-accent-foreground transition-transform hover:scale-[1.01] disabled:cursor-not-allowed disabled:opacity-50"
           >
             <Play className="h-4 w-4" />
             {isRunning ? "Running pipeline..." : "Run pipeline"}
