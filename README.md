@@ -8,6 +8,8 @@ Most dev teams sit on data worth predicting from and never act on it. Not becaus
 
 Upload a dataset. Pick a target column. A team of AI agents handles the rest (analysis, feature engineering, model selection, training, evaluation, and deployment) while logging every decision it makes so you can inspect, trust, and ship the result.
 
+And when the pipeline finishes, you're not done interacting with it. A conversational chatbot agent sits on top of the entire system, letting you modify, rerun, and interrogate the pipeline through natural language. Ask why a feature was selected. Undo a change. Compare two runs. It plans the revision, executes the affected stages, and tracks the full history, so every experiment is reproducible and nothing is lost.
+
 No ML background required. No black box you can't interrogate. No hand-off to a specialist.
 
 ---
@@ -18,7 +20,8 @@ No ML background required. No black box you can't interrogate. No hand-off to a 
 2. **Pick a target column**: the column you want to predict
 3. **Run the pipeline**: eight agents execute in sequence, visualised in real time
 4. **Inspect every decision**: click any stage to see what the agent did and why
-5. **Ship the result**: download a deployment package with a working REST API, Docker config, and a plain-English model report ready for stakeholders
+5. **Refine conversationally**: tell the chatbot what you want to change; it plans the revision, reruns only the affected stages, and stores the diff
+6. **Ship the result**: download a deployment package with a working REST API, Docker config, and a plain-English model report ready for stakeholders
 
 ---
 
@@ -34,6 +37,11 @@ No ML background required. No black box you can't interrogate. No hand-off to a 
 | `EvaluationAgent` | Computes metrics, detects overfitting, decides deploy or reject |
 | `DeploymentAgent` | Saves model and metadata, generates deployment package |
 | `ExplanationGeneratorAgent` | Generates feature importance and SHAP-style explanations |
+
+---
+
+## Conversational pipeline agent
+A floating chat interface gives you full control over the pipeline through natural language. This isn't just a Q&A wrapper-- it's an orchestration agent that can modify, rerun, and audit the pipeline safely.
 
 ---
 
